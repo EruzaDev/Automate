@@ -19,6 +19,50 @@ export function loadImage(src) {
 }
 
 /**
+ * Creates a low-res, compressed thumbnail Data URL from an image source
+ * @param {string} src - Original image Data URL or URL
+ * @param {number} maxDim - Max width/height dimension for thumbnail (default 120)
+ * @param {number} quality - Compression quality 0 to 1 (default 0.6)
+ * @returns {Promise<string>} Compressed JPEG Data URL
+ */
+export function createCompressedThumbnail(src, maxDim = 120, quality = 0.6) {
+  return new Promise((resolve) => {
+    if (!src) return resolve(src);
+    const img = new Image();
+    img.onload = () => {
+      let width = img.naturalWidth || img.width || 100;
+      let height = img.naturalHeight || img.height || 100;
+      if (width > height) {
+        if (width > maxDim) {
+          height = Math.round((height * maxDim) / width);
+          width = maxDim;
+        }
+      } else {
+        if (height > maxDim) {
+          width = Math.round((width * maxDim) / height);
+          height = maxDim;
+        }
+      }
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext('2d');
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = 'medium';
+      ctx.drawImage(img, 0, 0, width, height);
+      try {
+        const thumbUrl = canvas.toDataURL('image/jpeg', quality);
+        resolve(thumbUrl);
+      } catch (e) {
+        resolve(src);
+      }
+    };
+    img.onerror = () => resolve(src);
+    img.src = src;
+  });
+}
+
+/**
  * Transforms casing for strings
  */
 export function applyCasing(text, format) {

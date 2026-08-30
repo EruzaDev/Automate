@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Image as ImageIcon, Upload, Layers, Crop, Download, Loader2, CheckSquare, Square } from 'lucide-react';
-import { renderCanvasElement, loadImage } from '../../utils/canvasRenderer';
+import { renderCanvasElement, loadImage, createCompressedThumbnail } from '../../utils/canvasRenderer';
 import { exportBatchToZip } from '../../utils/zipExporter';
 
 export default function FrameEditor({ onStartExport, setExportStatus, onProgressChange, onRegisterCancel }) {
@@ -16,6 +16,10 @@ export default function FrameEditor({ onStartExport, setExportStatus, onProgress
 
   const [docAlignment, setDocAlignment] = useState('center');
   const [autoClearPhotos, setAutoClearPhotos] = useState(true);
+
+  // Virtual Scroll State for Batch Photos List (renders only visible items)
+  const [listScrollTop, setListScrollTop] = useState(0);
+  const listContainerRef = useRef(null);
 
   // Uploading Loading State
   const [isUploadingFrame, setIsUploadingFrame] = useState(false);
@@ -109,12 +113,15 @@ export default function FrameEditor({ onStartExport, setExportStatus, onProgress
 
     files.forEach((file, i) => {
       const reader = new FileReader();
-      reader.onload = (evt) => {
-        const id = `doc-${Date.now()}-${i}`;
+      reader.onload = async (evt) => {
+        const rawSrc = evt.target?.result;
+        const thumbSrc = await createCompressedThumbnail(rawSrc, 120, 0.6);
+        const id = `doc-${Date.now()}-${i}-${Math.random().toString(36).substring(2, 6)}`;
         newItems.push({
           id,
           name: file.name,
-          src: evt.target?.result,
+          src: rawSrc,
+          thumbSrc,
           ratio: 'Custom'
         });
         readCount++;
@@ -192,6 +199,20 @@ export default function FrameEditor({ onStartExport, setExportStatus, onProgress
       setActiveDocIdx(0);
     }
   };
+
+  // Virtual list windowing parameters (only renders items currently in sight)
+  const ITEM_HEIGHT = 60; // 52px item height + 8px gap
+  const CONTAINER_HEIGHT = 224; // max-h-56 = 14rem = 224px
+  const OVERSCAN = 3;
+  const totalDocCount = docImages.length;
+  const virtStartIndex = Math.max(0, Math.floor(listScrollTop / ITEM_HEIGHT) - OVERSCAN);
+  const virtEndIndex = Math.min(
+    totalDocCount,
+    Math.ceil((listScrollTop + (listContainerRef.current?.clientHeight || CONTAINER_HEIGHT)) / ITEM_HEIGHT) + OVERSCAN
+  );
+  const virtTopSpacerHeight = virtStartIndex * ITEM_HEIGHT;
+  const virtBottomSpacerHeight = Math.max(0, (totalDocCount - virtEndIndex) * ITEM_HEIGHT);
+  const visibleDocImages = docImages.slice(virtStartIndex, virtEndIndex);
 
   return (
     <div className="space-y-6 animate-fade-in">
@@ -341,44 +362,64 @@ export default function FrameEditor({ onStartExport, setExportStatus, onProgress
               </div>
             )}
 
-            <div className="space-y-2 max-h-56 overflow-auto pr-1">
+            <div
+              ref={listContainerRef}
+              onScroll={(e) => setListScrollTop(e.target.scrollTop)}
+              className="max-h-56 overflow-auto pr-1 relative"
+            >
               {docImages.length === 0 ? (
                 <span className="text-xs text-slate-400 block py-4 text-center">No documentation photos uploaded yet.</span>
               ) : (
-                docImages.map((doc, idx) => {
-                  const isSelected = selectedPhotoIds.has(doc.id);
-                  return (
-                    <div
-                      key={doc.id}
-                      onClick={() => setActiveDocIdx(idx)}
-                      className={`p-2.5 rounded-xl border flex items-center justify-between cursor-pointer transition-all ${
-                        activeDocIdx === idx
-                          ? 'bg-purple-500/15 border-purple-500 text-main shadow-md'
-                          : 'glass-panel text-slate-400 hover:border-purple-500/40'
-                      }`}
-                    >
-                      <div className="flex items-center gap-3 overflow-hidden">
-                        <input
-                          type="checkbox"
-                          checked={isSelected}
-                          onChange={(e) => {
-                            e.stopPropagation();
-                            handleTogglePhotoSelection(doc.id);
-                          }}
-                          className="accent-purple-500 cursor-pointer w-4 h-4 flex-shrink-0"
-                        />
-                        <img src={doc.src} alt="thumb" className="w-9 h-9 rounded-lg object-cover border border-slate-500/30" />
-                        <div>
-                          <span className="text-xs font-bold block truncate max-w-[150px]">{doc.name}</span>
-                          <span className="text-[10px] text-slate-400">Ratio: {doc.ratio || 'Auto'}</span>
+                <div className="flex flex-col gap-2">
+                  {virtTopSpacerHeight > 0 && (
+                    <div style={{ height: `${virtTopSpacerHeight}px` }} aria-hidden="true" />
+                  )}
+                  {visibleDocImages.map((doc, relIdx) => {
+                    const idx = virtStartIndex + relIdx;
+                    const isSelected = selectedPhotoIds.has(doc.id);
+                    return (
+                      <div
+                        key={doc.id}
+                        onClick={() => setActiveDocIdx(idx)}
+                        className={`p-2.5 rounded-xl border flex items-center justify-between cursor-pointer transition-all ${
+                          activeDocIdx === idx
+                            ? 'bg-purple-500/15 border-purple-500 text-main shadow-md'
+                            : 'glass-panel text-slate-400 hover:border-purple-500/40'
+                        }`}
+                        style={{ height: '52px' }}
+                      >
+                        <div className="flex items-center gap-3 overflow-hidden">
+                          <input
+                            type="checkbox"
+                            checked={isSelected}
+                            onChange={(e) => {
+                              e.stopPropagation();
+                              handleTogglePhotoSelection(doc.id);
+                            }}
+                            className="accent-purple-500 cursor-pointer w-4 h-4 flex-shrink-0"
+                          />
+                          <img
+                            src={doc.thumbSrc || doc.src}
+                            alt="thumb"
+                            loading="lazy"
+                            decoding="async"
+                            className="w-9 h-9 rounded-lg object-cover border border-slate-500/30 flex-shrink-0"
+                          />
+                          <div className="min-w-0">
+                            <span className="text-xs font-bold block truncate max-w-[150px]">{doc.name}</span>
+                            <span className="text-[10px] text-slate-400">Ratio: {doc.ratio || 'Auto'}</span>
+                          </div>
                         </div>
+                        {activeDocIdx === idx && (
+                          <span className="badge badge-purple text-[10px] flex-shrink-0">Active</span>
+                        )}
                       </div>
-                      {activeDocIdx === idx && (
-                        <span className="badge badge-purple text-[10px]">Active</span>
-                      )}
-                    </div>
-                  );
-                })
+                    );
+                  })}
+                  {virtBottomSpacerHeight > 0 && (
+                    <div style={{ height: `${virtBottomSpacerHeight}px` }} aria-hidden="true" />
+                  )}
+                </div>
               )}
             </div>
           </div>
