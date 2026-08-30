@@ -164,7 +164,9 @@ export async function exportLayoutsToZip({
   folderSortColumns = [],
   folderStructureMode = 'combined',
   maxDimension = 2560,
+  safeMemoryMode = false,
   onProgress,
+  onZipProgress,
   shouldCancel
 }) {
   const zip = new JSZip();
@@ -196,6 +198,10 @@ export async function exportLayoutsToZip({
       await renderRecordToCanvas(row, layout, exportCanvas, 620, maxDimension);
       
       const blob = await getCanvasBlob(exportCanvas);
+
+      // Reset export canvas backing store to free GPU texture RAM immediately
+      exportCanvas.width = 0;
+      exportCanvas.height = 0;
 
       // Formulate filename
       const nameHint = row.last_name && row.first_name
@@ -240,8 +246,13 @@ export async function exportLayoutsToZip({
       onProgress(i + 1, rows.length);
     }
 
-    // Yield main thread with periodic micro-pauses to allow UI rendering & GC sweeps
-    await new Promise((resolve) => setTimeout(resolve, 4));
+    // Adaptive yielding: Longer pauses every 5 records in safe memory mode or large batch
+    const isChunkBoundary = (i + 1) % 5 === 0;
+    const pauseMs = safeMemoryMode || rows.length > 50
+      ? (isChunkBoundary ? 60 : 15)
+      : 8;
+
+    await new Promise((resolve) => setTimeout(resolve, pauseMs));
   }
 
   if (shouldCancel && shouldCancel()) {
@@ -250,11 +261,18 @@ export async function exportLayoutsToZip({
     return;
   }
 
-  const content = await zip.generateAsync({
-    type: 'blob',
-    compression: 'STORE',
-    streamFiles: true
-  });
+  const content = await zip.generateAsync(
+    {
+      type: 'blob',
+      compression: 'STORE',
+      streamFiles: true
+    },
+    (metadata) => {
+      if (onZipProgress) {
+        onZipProgress(Math.round(metadata.percent));
+      }
+    }
+  );
 
   exportCanvas.width = 0;
   exportCanvas.height = 0;

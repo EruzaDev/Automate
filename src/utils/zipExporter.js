@@ -34,7 +34,9 @@ export async function exportBatchToZip({
   groupByColumns = [], // e.g. ['section', 'year']
   zipName = 'Batch_Generated_Assets.zip',
   maxDimension = 2560, // Cap resolution at 2.5K (2560px) to prevent 8K memory bloat & CPU encoding freeze
+  safeMemoryMode = false,
   onProgress,
+  onZipProgress,
   shouldCancel
 }) {
   const zip = new JSZip();
@@ -146,8 +148,13 @@ export async function exportBatchToZip({
       onProgress(i + 1, total);
     }
 
-    // Yield main thread with periodic micro-pauses to allow UI rendering & GC sweeps
-    await new Promise((resolve) => setTimeout(resolve, 4));
+    // Adaptive yielding: Longer pauses every 5 records in safe memory mode or large batch
+    const isChunkBoundary = (i + 1) % 5 === 0;
+    const pauseMs = safeMemoryMode || total > 50
+      ? (isChunkBoundary ? 60 : 15)
+      : 8;
+
+    await new Promise((resolve) => setTimeout(resolve, pauseMs));
   }
 
   if (shouldCancel && shouldCancel()) {
@@ -157,11 +164,18 @@ export async function exportBatchToZip({
   }
 
   // Generate & Download ZIP with STREAM mode for high performance
-  const content = await zip.generateAsync({
-    type: 'blob',
-    compression: 'STORE',
-    streamFiles: true
-  });
+  const content = await zip.generateAsync(
+    {
+      type: 'blob',
+      compression: 'STORE',
+      streamFiles: true
+    },
+    (metadata) => {
+      if (onZipProgress) {
+        onZipProgress(Math.round(metadata.percent));
+      }
+    }
+  );
 
   // Free GPU memory allocated to offscreen canvas
   offscreenCanvas.width = 0;

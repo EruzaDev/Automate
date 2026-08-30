@@ -15,6 +15,8 @@ export default function LayoutStudio({ onStartExport, setExportStatus, onProgres
   // Folder Hierarchy Sort State
   const [folderSortColumns, setFolderSortColumns] = useState([]);
   const [folderStructureMode, setFolderStructureMode] = useState('combined'); // 'combined' | 'nested'
+  const [exportResolution, setExportResolution] = useState(1920); // Default 1920px (Full HD) for fast memory performance
+  const [safeMemoryMode, setSafeMemoryMode] = useState(() => typeof window !== 'undefined' && ('ontouchstart' in window || (navigator.maxTouchPoints && navigator.maxTouchPoints > 0)));
 
   const handleAddFolderSortColumn = (colKey) => {
     if (!colKey || folderSortColumns.includes(colKey)) return;
@@ -484,10 +486,17 @@ export default function LayoutStudio({ onStartExport, setExportStatus, onProgres
       layoutColumnKey,
       folderSortColumns,
       folderStructureMode,
+      maxDimension: exportResolution,
+      safeMemoryMode,
       onProgress: (current, total) => {
-        const curStatus = { isExporting: true, isFinished: false, progress: current, total };
+        const curStatus = { isExporting: true, isFinished: false, progress: current, total, phase: 'rendering', zipPercent: 0 };
         setLocalExportStatus(curStatus);
         if (setExportStatus) setExportStatus(curStatus);
+      },
+      onZipProgress: (percent) => {
+        const packingStatus = { isExporting: true, isFinished: false, progress: selectedRowsToExport.length, total: selectedRowsToExport.length, phase: 'packing', zipPercent: percent };
+        setLocalExportStatus(packingStatus);
+        if (setExportStatus) setExportStatus(packingStatus);
       },
       shouldCancel: () => cancelExportRef.current
     });
@@ -1380,6 +1389,38 @@ export default function LayoutStudio({ onStartExport, setExportStatus, onProgres
             {dataFileName && (
               <span className="text-[10px] text-slate-400 block truncate">{dataFileName}</span>
             )}
+
+            {/* Export Resolution / Quality Picker */}
+            <div className="space-y-2 pt-2 border-t border-slate-800/60">
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-slate-400 font-medium">Export Resolution:</span>
+                <select
+                  value={exportResolution}
+                  onChange={(e) => setExportResolution(Number(e.target.value))}
+                  className="select-dark text-xs py-1 px-2 border-slate-700 bg-slate-950 font-semibold text-amber-300"
+                >
+                  <option value={2560}>Ultra 2.5K (2560px)</option>
+                  <option value={1920}>Full HD 1080p (1920px - Fast)</option>
+                  <option value={1280}>Compact (1280px - Super Fast)</option>
+                </select>
+              </div>
+
+              {/* Safe Memory Mode (Prevents Mobile Crashes) */}
+              <label className="flex items-center justify-between p-2 rounded-xl bg-slate-950 border border-slate-800 cursor-pointer hover:border-slate-700 transition-colors">
+                <div className="space-y-0.5 pr-2">
+                  <span className="text-[11px] font-bold text-amber-300 block">Safe Memory Mode</span>
+                  <span className="text-[9.5px] text-slate-400 block leading-tight">
+                    Throttles RAM usage to prevent mobile browser crashes on large HD batches.
+                  </span>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={safeMemoryMode}
+                  onChange={(e) => setSafeMemoryMode(e.target.checked)}
+                  className="w-4 h-4 accent-amber-500 rounded cursor-pointer"
+                />
+              </label>
+            </div>
           </div>
 
           {/* ZIP Folder Hierarchy & Sorting Options */}
@@ -1561,9 +1602,13 @@ export default function LayoutStudio({ onStartExport, setExportStatus, onProgres
                 </div>
 
                 <div className="space-y-1">
-                  <h3 className="text-lg font-bold text-white">Generating Batch Certificates</h3>
+                  <h3 className="text-lg font-bold text-white">
+                    {localExportStatus.phase === 'packing' ? 'Packing ZIP Archive...' : 'Generating Batch Certificates'}
+                  </h3>
                   <p className="text-xs text-slate-400 font-mono">
-                    Rendering certificate {localExportStatus.progress} of {localExportStatus.total}...
+                    {localExportStatus.phase === 'packing'
+                      ? `Compressing & packaging ZIP file (${localExportStatus.zipPercent || 0}%)...`
+                      : `Rendering certificate ${localExportStatus.progress} of ${localExportStatus.total}...`}
                   </p>
                 </div>
 
@@ -1571,15 +1616,31 @@ export default function LayoutStudio({ onStartExport, setExportStatus, onProgres
                 <div className="space-y-1.5">
                   <div className="w-full bg-slate-950 rounded-full h-3 overflow-hidden border border-slate-800 p-0.5">
                     <div
-                      className="bg-gradient-to-r from-amber-500 to-yellow-400 h-full rounded-full transition-all duration-200 shadow-lg shadow-amber-500/50"
+                      className={`h-full rounded-full transition-all duration-200 ${
+                        localExportStatus.phase === 'packing'
+                          ? 'bg-gradient-to-r from-amber-500 via-orange-500 to-yellow-400 shadow-lg shadow-amber-500/50'
+                          : 'bg-gradient-to-r from-amber-500 to-yellow-400 shadow-lg shadow-amber-500/50'
+                      }`}
                       style={{
-                        width: `${localExportStatus.total > 0 ? Math.round((localExportStatus.progress / localExportStatus.total) * 100) : 0}%`
+                        width: `${
+                          localExportStatus.phase === 'packing'
+                            ? (localExportStatus.zipPercent || 0)
+                            : (localExportStatus.total > 0 ? Math.round((localExportStatus.progress / localExportStatus.total) * 100) : 0)
+                        }%`
                       }}
                     ></div>
                   </div>
                   <div className="flex justify-between text-[11px] font-mono text-slate-400">
-                    <span>{Math.round((localExportStatus.progress / (localExportStatus.total || 1)) * 100)}% Completed</span>
-                    <span>{localExportStatus.progress} / {localExportStatus.total}</span>
+                    <span>
+                      {localExportStatus.phase === 'packing'
+                        ? `${localExportStatus.zipPercent || 0}% Packed`
+                        : `${Math.round((localExportStatus.progress / (localExportStatus.total || 1)) * 100)}% Rendered`}
+                    </span>
+                    <span>
+                      {localExportStatus.phase === 'packing'
+                        ? `Packing ZIP • ${localExportStatus.zipPercent || 0}%`
+                        : `${localExportStatus.progress} / ${localExportStatus.total}`}
+                    </span>
                   </div>
                 </div>
 

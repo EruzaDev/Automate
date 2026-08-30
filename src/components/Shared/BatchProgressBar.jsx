@@ -2,7 +2,7 @@ import React, { useEffect } from 'react';
 import confetti from 'canvas-confetti';
 import { Loader2, CheckCircle2, Download, XCircle } from 'lucide-react';
 
-export default function BatchProgressBar({ progress, total, isExporting, isFinished, onClose, onCancel }) {
+export default function BatchProgressBar({ progress, total, zipPercent = 0, phase = 'rendering', isExporting, isFinished, onClose, onCancel }) {
   useEffect(() => {
     if (isFinished) {
       confetti({
@@ -15,7 +15,9 @@ export default function BatchProgressBar({ progress, total, isExporting, isFinis
 
   if (!isExporting && !isFinished) return null;
 
-  const percentage = total > 0 ? Math.round((progress / total) * 100) : 0;
+  const isPacking = phase === 'packing';
+  const renderPercentage = total > 0 ? Math.round((progress / total) * 100) : 0;
+  const currentPercent = isPacking ? zipPercent : renderPercentage;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-md p-4 animate-fade-in">
@@ -45,9 +47,13 @@ export default function BatchProgressBar({ progress, total, isExporting, isFinis
               <Loader2 className="w-8 h-8 animate-spin" />
             </div>
             <div>
-              <h3 className="text-xl font-bold text-white">Generating Batch Assets...</h3>
-              <p className="text-sm text-[var(--text-muted)] mt-1">
-                Rendering item {progress} of {total}
+              <h3 className="text-xl font-bold text-white">
+                {isPacking ? 'Packing ZIP Archive...' : 'Generating Batch Assets...'}
+              </h3>
+              <p className="text-sm text-[var(--text-muted)] mt-1 font-mono">
+                {isPacking
+                  ? `Compressing & packaging ZIP file (${zipPercent}%)...`
+                  : `Rendering item ${progress} of ${total}`}
               </p>
             </div>
             
@@ -55,13 +61,19 @@ export default function BatchProgressBar({ progress, total, isExporting, isFinis
             <div className="space-y-2">
               <div className="h-3 w-full bg-slate-800 rounded-full overflow-hidden p-0.5 border border-slate-700">
                 <div
-                  className="h-full bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 rounded-full transition-all duration-300"
-                  style={{ width: `${percentage}%` }}
+                  className={`h-full rounded-full transition-all duration-300 ${
+                    isPacking
+                      ? 'bg-gradient-to-r from-amber-500 via-orange-500 to-yellow-400 shadow-lg shadow-amber-500/50'
+                      : 'bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500'
+                  }`}
+                  style={{ width: `${currentPercent}%` }}
                 />
               </div>
-              <div className="flex justify-between text-xs font-semibold text-[var(--text-muted)]">
-                <span>{percentage}%</span>
-                <span>{progress} / {total} Assets</span>
+              <div className="flex justify-between text-xs font-semibold text-[var(--text-muted)] font-mono">
+                <span>{currentPercent}%</span>
+                <span>
+                  {isPacking ? `Packing ${zipPercent}%` : `${progress} / ${total} Assets`}
+                </span>
               </div>
             </div>
 

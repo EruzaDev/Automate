@@ -181,7 +181,10 @@ export default function FrameEditor({ onStartExport, setExportStatus, onProgress
       fileNamePattern: 'framed_{name}',
       zipName: 'Framed_Documentation_Batch.zip',
       onProgress: (current, total) => {
-        setExportStatus((prev) => ({ ...prev, progress: current }));
+        setExportStatus((prev) => ({ ...prev, progress: current, total, phase: 'rendering', zipPercent: 0 }));
+      },
+      onZipProgress: (percent) => {
+        setExportStatus((prev) => ({ ...prev, phase: 'packing', zipPercent: percent }));
       },
       shouldCancel: () => cancelExportRef.current
     });
