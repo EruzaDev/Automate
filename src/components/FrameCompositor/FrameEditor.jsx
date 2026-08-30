@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Image as ImageIcon, Upload, Layers, Crop, Download, Loader2, CheckSquare, Square } from 'lucide-react';
+import { Image as ImageIcon, Upload, Layers, Crop, Download, Loader2, CheckSquare, Square, HelpCircle, ShieldAlert, ShieldCheck } from 'lucide-react';
 import { renderCanvasElement, loadImage, createCompressedThumbnail } from '../../utils/canvasRenderer';
 import { exportBatchToZip } from '../../utils/zipExporter';
 
@@ -16,6 +16,12 @@ export default function FrameEditor({ onStartExport, setExportStatus, onProgress
 
   const [docAlignment, setDocAlignment] = useState('center');
   const [autoClearPhotos, setAutoClearPhotos] = useState(true);
+
+  // Export Quality & Safe Memory Settings
+  const [exportResolution, setExportResolution] = useState(0); // Default 0 = Original (100% Native Quality)
+  const [safeMemoryMode, setSafeMemoryMode] = useState(() => typeof window !== 'undefined' && ('ontouchstart' in window || (navigator.maxTouchPoints && navigator.maxTouchPoints > 0)));
+  const [isLargeBatchModalOpen, setIsLargeBatchModalOpen] = useState(false);
+  const [localExportStatus, setLocalExportStatus] = useState({ isExporting: false, isFinished: false, progress: 0, total: 0, phase: 'rendering', zipPercent: 0, currentZipFile: '', currentVolume: 1, totalVolumes: 1 });
 
   // Virtual Scroll State for Batch Photos List (renders only visible items)
   const [listScrollTop, setListScrollTop] = useState(0);
@@ -143,6 +149,15 @@ export default function FrameEditor({ onStartExport, setExportStatus, onProgress
 
   const cancelExportRef = useRef(false);
 
+  const handleInitiateBatchExport = () => {
+    const selectedCount = selectedPhotoIds.size > 0 ? selectedPhotoIds.size : docImages.length;
+    if (selectedCount >= 100 && !safeMemoryMode) {
+      setIsLargeBatchModalOpen(true);
+      return;
+    }
+    handleBatchExport();
+  };
+
   const handleBatchExport = async () => {
     const selectedDocs = docImages.filter((doc) => selectedPhotoIds.has(doc.id));
 
@@ -155,12 +170,16 @@ export default function FrameEditor({ onStartExport, setExportStatus, onProgress
     if (onRegisterCancel) {
       onRegisterCancel(() => {
         cancelExportRef.current = true;
-        setExportStatus({ isExporting: false, isFinished: false, progress: 0, total: 0 });
+        const resetStatus = { isExporting: false, isFinished: false, progress: 0, total: 0 };
+        setLocalExportStatus(resetStatus);
+        if (setExportStatus) setExportStatus(resetStatus);
       });
     }
 
-    onStartExport();
-    setExportStatus({ isExporting: true, isFinished: false, progress: 0, total: selectedDocs.length });
+    if (onStartExport) onStartExport();
+    const initialStatus = { isExporting: true, isFinished: false, progress: 0, total: selectedDocs.length };
+    setLocalExportStatus(initialStatus);
+    if (setExportStatus) setExportStatus(initialStatus);
 
     const records = selectedDocs.map((doc) => ({
       name: doc.name.replace(/\.[^/.]+$/, ''),
@@ -180,21 +199,51 @@ export default function FrameEditor({ onStartExport, setExportStatus, onProgress
       height: canvasSize.height,
       fileNamePattern: 'framed_{name}',
       zipName: 'Framed_Documentation_Batch.zip',
-      onProgress: (current, total) => {
-        setExportStatus((prev) => ({ ...prev, progress: current, total, phase: 'rendering', zipPercent: 0 }));
+      maxDimension: exportResolution,
+      safeMemoryMode,
+      batchChunkSize: 500,
+      onProgress: (current, total, volInfo) => {
+        const curStatus = {
+          isExporting: true,
+          isFinished: false,
+          progress: current,
+          total,
+          phase: 'rendering',
+          zipPercent: 0,
+          currentVolume: volInfo?.currentVolume || 1,
+          totalVolumes: volInfo?.totalVolumes || 1
+        };
+        setLocalExportStatus(curStatus);
+        if (setExportStatus) setExportStatus(curStatus);
       },
-      onZipProgress: (percent) => {
-        setExportStatus((prev) => ({ ...prev, phase: 'packing', zipPercent: percent }));
+      onZipProgress: (percent, currentFile, volInfo) => {
+        const packingStatus = {
+          isExporting: true,
+          isFinished: false,
+          progress: selectedDocs.length,
+          total: selectedDocs.length,
+          phase: 'packing',
+          zipPercent: percent,
+          currentZipFile: currentFile,
+          currentVolume: volInfo?.currentVolume || 1,
+          totalVolumes: volInfo?.totalVolumes || 1
+        };
+        setLocalExportStatus(packingStatus);
+        if (setExportStatus) setExportStatus(packingStatus);
       },
       shouldCancel: () => cancelExportRef.current
     });
 
     if (cancelExportRef.current) {
-      setExportStatus({ isExporting: false, isFinished: false, progress: 0, total: 0 });
+      const resetStatus = { isExporting: false, isFinished: false, progress: 0, total: 0 };
+      setLocalExportStatus(resetStatus);
+      if (setExportStatus) setExportStatus(resetStatus);
       return;
     }
 
-    setExportStatus((prev) => ({ ...prev, isExporting: false, isFinished: true }));
+    const doneStatus = { isExporting: false, isFinished: true, progress: selectedDocs.length, total: selectedDocs.length, phase: 'complete' };
+    setLocalExportStatus(doneStatus);
+    if (setExportStatus) setExportStatus(doneStatus);
 
     if (autoClearPhotos) {
       setDocImages([]);
@@ -527,28 +576,104 @@ export default function FrameEditor({ onStartExport, setExportStatus, onProgress
             </div>
           </div>
 
-          {/* Export Button & Memory Cleanup Control */}
-          <div className="space-y-2">
-            <button
-              onClick={handleBatchExport}
-              disabled={docImages.length === 0 || selectedPhotoIds.size === 0}
-              className="btn-primary text-sm w-full py-3 justify-center shadow-lg shadow-purple-500/20 disabled:opacity-40 font-bold"
-            >
-              <Download className="w-4 h-4" />
-              {selectedPhotoIds.size === 0
-                ? 'No Photos Selected'
-                : `Export Selected (${selectedPhotoIds.size} Photos ZIP)`}
-            </button>
+          {/* Step 4: Export Quality & Safe Memory Settings */}
+          <div className="glass-panel p-5 space-y-4">
+            <div className="flex items-center justify-between">
+              <h3 className="font-bold text-sm text-main flex items-center gap-2">
+                <Download className="w-4 h-4 text-purple-400" />
+                Step 4: Export Quality & Memory
+              </h3>
+            </div>
 
-            <label className="flex items-center gap-2 text-[11px] text-slate-400 cursor-pointer select-none px-1">
-              <input
-                type="checkbox"
-                checked={autoClearPhotos}
-                onChange={(e) => setAutoClearPhotos(e.target.checked)}
-                className="accent-purple-500 rounded w-3.5 h-3.5"
-              />
-              <span>Auto-clear photo buffer after download (prevents space buildup)</span>
-            </label>
+            <div className="space-y-3">
+              <div>
+                <label className="text-xs font-bold text-slate-300 block mb-1.5">
+                  Export Resolution (Max Dimension):
+                </label>
+                <select
+                  value={exportResolution}
+                  onChange={(e) => setExportResolution(Number(e.target.value))}
+                  className="w-full text-xs py-2 px-3 bg-slate-950 border border-slate-700 rounded-xl text-white focus:outline-none focus:border-purple-500 transition-all cursor-pointer"
+                >
+                  <option value={0}>Original (100% Native Quality)</option>
+                  <option value={2560}>Ultra (2560px Cap - High Quality)</option>
+                  <option value={1920}>HD (1920px Cap - Balanced)</option>
+                  <option value={1280}>Compact (1280px Cap - Mobile/Web)</option>
+                </select>
+              </div>
+
+              {/* Safe Memory Mode Toggle */}
+              <div className="p-3.5 rounded-xl bg-slate-950/80 border border-slate-800 space-y-2">
+                <div className="flex items-center justify-between">
+                  <label className="flex items-center gap-2 text-xs font-bold text-white cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={safeMemoryMode}
+                      onChange={(e) => setSafeMemoryMode(e.target.checked)}
+                      className="accent-purple-500 rounded w-4 h-4 cursor-pointer"
+                    />
+                    <span>Safe Memory Mode (Anti-Crash)</span>
+                  </label>
+                  <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                    safeMemoryMode 
+                      ? 'bg-purple-500/20 text-purple-300 border border-purple-500/40' 
+                      : 'bg-slate-800 text-slate-400'
+                  }`}>
+                    {safeMemoryMode ? 'ACTIVE' : 'OFF'}
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-400 leading-relaxed">
+                  Forces Garbage Collection breaks and instant GPU texture cleanup to prevent browser tab crashes on mobile/tablets.
+                </p>
+
+                {/* Safe Memory Mode Instructions Box */}
+                <div className="pt-2 border-t border-slate-800/80 space-y-1.5">
+                  <div className="flex items-center gap-1.5 text-purple-300 font-bold text-[11px]">
+                    <HelpCircle className="w-3.5 h-3.5 text-purple-400" />
+                    <span>Safe Memory Mode Guide:</span>
+                  </div>
+                  <ul className="list-disc list-inside text-[10px] text-slate-400 space-y-1 leading-normal">
+                    <li><strong className="text-slate-300">Mobile / Tablets / 50+ Items:</strong> Keep <span className="text-purple-300">ENABLED</span> to guarantee 100% crash protection.</li>
+                    <li><strong className="text-slate-300">High-Spec Desktop:</strong> You can turn <span className="text-slate-300">OFF</span> for up to 3x faster generation speed.</li>
+                  </ul>
+                </div>
+              </div>
+            </div>
+
+            {/* Export Button */}
+            <div className="space-y-2 pt-1">
+              <button
+                onClick={handleInitiateBatchExport}
+                disabled={docImages.length === 0 || selectedPhotoIds.size === 0 || localExportStatus.isExporting}
+                className="btn-primary text-sm w-full py-3 justify-center shadow-lg shadow-purple-500/20 disabled:opacity-40 font-bold flex items-center gap-2"
+              >
+                {localExportStatus.isExporting ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin text-white" />
+                    <span>Generating ({localExportStatus.progress}/{localExportStatus.total})...</span>
+                  </>
+                ) : (
+                  <>
+                    <Download className="w-4 h-4" />
+                    <span>
+                      {selectedPhotoIds.size === 0
+                        ? 'No Photos Selected'
+                        : `Export Selected (${selectedPhotoIds.size} Photos ZIP)`}
+                    </span>
+                  </>
+                )}
+              </button>
+
+              <label className="flex items-center gap-2 text-[11px] text-slate-400 cursor-pointer select-none px-1">
+                <input
+                  type="checkbox"
+                  checked={autoClearPhotos}
+                  onChange={(e) => setAutoClearPhotos(e.target.checked)}
+                  className="accent-purple-500 rounded w-3.5 h-3.5"
+                />
+                <span>Auto-clear photo buffer after download (prevents space buildup)</span>
+              </label>
+            </div>
           </div>
         </div>
 
@@ -576,6 +701,169 @@ export default function FrameEditor({ onStartExport, setExportStatus, onProgress
           </div>
         </div>
       </div>
+
+      {/* Large Batch Safe Mode Advisory Modal */}
+      {isLargeBatchModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-fade-in">
+          <div className="bg-slate-900 border border-purple-500/40 w-full max-w-md rounded-2xl shadow-2xl overflow-hidden p-6 space-y-4">
+            <div className="flex items-center gap-3 text-purple-400">
+              <div className="p-3 rounded-xl bg-purple-500/20 border border-purple-500/30">
+                <ShieldAlert className="w-6 h-6 text-purple-400" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-white">Large Batch Optimization Advisory</h3>
+                <p className="text-xs text-purple-300 font-medium">
+                  {(selectedPhotoIds.size || docImages.length).toLocaleString()} Photos Selected
+                </p>
+              </div>
+            </div>
+
+            <p className="text-xs text-slate-300 leading-relaxed">
+              You are exporting a large batch of <strong>{(selectedPhotoIds.size || docImages.length).toLocaleString()} framed photos</strong>. 
+              Enabling <strong>Safe Memory Mode</strong> is recommended for batches over 100 items to prevent browser memory exhaustion and ensure 100% stable ZIP generation.
+            </p>
+
+            <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 space-y-1.5 text-[11px]">
+              <div className="flex items-center justify-between text-purple-300 font-bold">
+                <span>Recommended Setup:</span>
+              </div>
+              <ul className="list-disc list-inside text-slate-400 space-y-1">
+                <li><strong>Safe Memory Mode:</strong> Enabled (Prevents memory leaks & crashes)</li>
+                <li><strong>ZIP Streaming:</strong> Fast STORE Mode Enabled</li>
+              </ul>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-2">
+              <button
+                onClick={() => {
+                  setSafeMemoryMode(true);
+                  setIsLargeBatchModalOpen(false);
+                  setTimeout(() => handleBatchExport(), 50);
+                }}
+                className="btn-primary text-xs py-2.5 justify-center font-bold flex items-center gap-1.5 shadow-md shadow-purple-500/20"
+              >
+                <ShieldCheck className="w-4 h-4 text-white" />
+                <span>Enable Safe & Start</span>
+              </button>
+              <button
+                onClick={() => {
+                  setIsLargeBatchModalOpen(false);
+                  setTimeout(() => handleBatchExport(), 50);
+                }}
+                className="btn-secondary text-xs py-2.5 justify-center text-slate-300 hover:text-white"
+              >
+                Proceed Fast
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Batch Generation Progress & Loading Modal */}
+      {(localExportStatus.isExporting || localExportStatus.isFinished) && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-fade-in">
+          <div className="bg-slate-900 border border-slate-700 w-full max-w-md rounded-2xl shadow-2xl overflow-hidden p-6 text-center space-y-5">
+            {localExportStatus.isExporting ? (
+              <>
+                <div className="relative w-16 h-16 mx-auto flex items-center justify-center">
+                  <div className="absolute inset-0 rounded-full border-4 border-purple-500/20 animate-ping"></div>
+                  <div className="w-16 h-16 rounded-full border-4 border-purple-400 border-t-transparent animate-spin"></div>
+                  <Download className="w-6 h-6 text-purple-400 absolute" />
+                </div>
+
+                <div className="space-y-1">
+                  {localExportStatus.totalVolumes > 1 && (
+                    <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-purple-500/20 text-purple-300 border border-purple-500/30 text-[10px] font-mono font-bold mb-1">
+                      <span>ZIP Volume {localExportStatus.currentVolume || 1} of {localExportStatus.totalVolumes}</span>
+                    </div>
+                  )}
+
+                  <h3 className="text-lg font-bold text-white">
+                    {localExportStatus.phase === 'packing' 
+                      ? (localExportStatus.totalVolumes > 1 ? `Packing Volume ${localExportStatus.currentVolume} of ${localExportStatus.totalVolumes}...` : 'Packing ZIP Archive...')
+                      : 'Generating Framed Photos'}
+                  </h3>
+                  <p className="text-xs text-slate-400 font-mono">
+                    {localExportStatus.phase === 'packing'
+                      ? `Compressing & packaging ZIP file (${localExportStatus.zipPercent || 0}%)...`
+                      : `Rendering photo ${localExportStatus.progress} of ${localExportStatus.total}...`}
+                  </p>
+
+                  {/* Live File Packing Ticker */}
+                  {localExportStatus.phase === 'packing' && localExportStatus.currentZipFile && (
+                    <div className="mt-2 p-2 rounded-xl bg-slate-950 border border-slate-800 text-[11px] font-mono text-purple-300 truncate shadow-inner">
+                      📦 Packing: {localExportStatus.currentZipFile}
+                    </div>
+                  )}
+                </div>
+
+                {/* Progress Bar & Percentage */}
+                <div className="space-y-1.5">
+                  <div className="w-full bg-slate-950 rounded-full h-3 overflow-hidden border border-slate-800 p-0.5">
+                    <div
+                      className={`h-full rounded-full transition-all duration-200 ${
+                        localExportStatus.phase === 'packing'
+                          ? 'bg-gradient-to-r from-purple-500 via-pink-500 to-indigo-500 shadow-lg shadow-purple-500/50'
+                          : 'bg-gradient-to-r from-purple-500 to-indigo-500 shadow-lg shadow-purple-500/50'
+                      }`}
+                      style={{
+                        width: `${
+                          localExportStatus.phase === 'packing'
+                            ? (localExportStatus.zipPercent || 0)
+                            : (localExportStatus.total > 0 ? Math.round((localExportStatus.progress / localExportStatus.total) * 100) : 0)
+                        }%`
+                      }}
+                    ></div>
+                  </div>
+                  <div className="flex justify-between text-[11px] font-mono text-slate-400">
+                    <span>
+                      {localExportStatus.phase === 'packing'
+                        ? `${localExportStatus.zipPercent || 0}% Packed`
+                        : `${Math.round((localExportStatus.progress / (localExportStatus.total || 1)) * 100)}% Rendered`}
+                    </span>
+                    <span>
+                      {localExportStatus.phase === 'packing'
+                        ? `Packing ZIP • ${localExportStatus.zipPercent || 0}%`
+                        : `${localExportStatus.progress} / ${localExportStatus.total}`}
+                    </span>
+                  </div>
+                </div>
+
+                <button
+                  onClick={() => {
+                    cancelExportRef.current = true;
+                  }}
+                  className="btn-secondary text-xs py-1.5 px-4 text-red-400 hover:text-red-300 border-red-500/30 font-bold"
+                >
+                  Cancel Export
+                </button>
+              </>
+            ) : (
+              <>
+                <div className="w-16 h-16 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 flex items-center justify-center mx-auto">
+                  <Download className="w-8 h-8" />
+                </div>
+                <div>
+                  <h3 className="text-xl font-bold text-white">Batch Framing Complete!</h3>
+                  <p className="text-xs text-slate-400 mt-1">
+                    Successfully processed {localExportStatus.total} assets and generated ZIP archive.
+                  </p>
+                </div>
+                <button
+                  onClick={() => {
+                    const doneStatus = { isExporting: false, isFinished: false, progress: 0, total: 0 };
+                    setLocalExportStatus(doneStatus);
+                    if (setExportStatus) setExportStatus(doneStatus);
+                  }}
+                  className="btn-primary w-full justify-center font-bold"
+                >
+                  Done
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
