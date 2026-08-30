@@ -2,7 +2,7 @@ import React, { useEffect } from 'react';
 import confetti from 'canvas-confetti';
 import { Loader2, CheckCircle2, Download, XCircle } from 'lucide-react';
 
-export default function BatchProgressBar({ progress, total, zipPercent = 0, phase = 'rendering', isExporting, isFinished, onClose, onCancel }) {
+export default function BatchProgressBar({ progress, total, zipPercent = 0, currentFile = '', phase = 'rendering', isExporting, isFinished, onClose, onCancel }) {
   useEffect(() => {
     if (isFinished) {
       confetti({
@@ -55,6 +55,11 @@ export default function BatchProgressBar({ progress, total, zipPercent = 0, phas
                   ? `Compressing & packaging ZIP file (${zipPercent}%)...`
                   : `Rendering item ${progress} of ${total}`}
               </p>
+              {isPacking && currentFile && (
+                <div className="mt-2 p-2 rounded-lg bg-slate-900 border border-slate-800 text-[11px] font-mono text-amber-300 truncate">
+                  📦 {currentFile}
+                </div>
+              )}
             </div>
             
             {/* Progress Bar Container */}

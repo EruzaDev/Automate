@@ -1,5 +1,5 @@
 import React, { useState, useRef } from 'react';
-import { Layout, Plus, Trash2, FileSpreadsheet, Download, Type, QrCode, Sliders, ArrowUp, ArrowDown, FolderPlus, FolderTree, Bold, Italic, Strikethrough, Underline, MessageSquare, Search, Table, Eye, CheckCircle, Loader2, CheckSquare, Square } from 'lucide-react';
+import { Layout, Plus, Trash2, FileSpreadsheet, Download, Type, QrCode, Sliders, ArrowUp, ArrowDown, FolderPlus, FolderTree, Bold, Italic, Strikethrough, Underline, MessageSquare, Search, Table, Eye, CheckCircle, Loader2, CheckSquare, Square, HelpCircle, ShieldAlert, ShieldCheck } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import InteractiveStage from './InteractiveStage';
 import CSVDataEditorModal from '../Shared/CSVDataEditorModal';
@@ -15,8 +15,9 @@ export default function LayoutStudio({ onStartExport, setExportStatus, onProgres
   // Folder Hierarchy Sort State
   const [folderSortColumns, setFolderSortColumns] = useState([]);
   const [folderStructureMode, setFolderStructureMode] = useState('combined'); // 'combined' | 'nested'
-  const [exportResolution, setExportResolution] = useState(1920); // Default 1920px (Full HD) for fast memory performance
+  const [exportResolution, setExportResolution] = useState(0); // Default 0 = Original (100% Native Resolution of imported certificate)
   const [safeMemoryMode, setSafeMemoryMode] = useState(() => typeof window !== 'undefined' && ('ontouchstart' in window || (navigator.maxTouchPoints && navigator.maxTouchPoints > 0)));
+  const [isLargeBatchModalOpen, setIsLargeBatchModalOpen] = useState(false);
 
   const handleAddFolderSortColumn = (colKey) => {
     if (!colKey || folderSortColumns.includes(colKey)) return;
@@ -455,6 +456,18 @@ export default function LayoutStudio({ onStartExport, setExportStatus, onProgres
 
   const cancelExportRef = useRef(false);
 
+  const handleInitiateBatchZip = () => {
+    if (layouts.length === 0 || rows.length === 0) return;
+    const selectedCount = selectedRowIndices.size > 0 ? selectedRowIndices.size : rows.length;
+
+    // Prompt for Large Batches (>100 items) if Safe Memory Mode is not enabled
+    if (selectedCount >= 100 && !safeMemoryMode) {
+      setIsLargeBatchModalOpen(true);
+      return;
+    }
+    handleGenerateBatchZip();
+  };
+
   // Export Batch ZIP for Selected Rows
   const handleGenerateBatchZip = async () => {
     if (layouts.length === 0 || rows.length === 0) return;
@@ -480,7 +493,7 @@ export default function LayoutStudio({ onStartExport, setExportStatus, onProgres
     setLocalExportStatus(initialStatus);
     if (setExportStatus) setExportStatus(initialStatus);
 
-    const zipBlob = await exportLayoutsToZip({
+    await exportLayoutsToZip({
       rows: selectedRowsToExport,
       layouts,
       layoutColumnKey,
@@ -488,13 +501,33 @@ export default function LayoutStudio({ onStartExport, setExportStatus, onProgres
       folderStructureMode,
       maxDimension: exportResolution,
       safeMemoryMode,
-      onProgress: (current, total) => {
-        const curStatus = { isExporting: true, isFinished: false, progress: current, total, phase: 'rendering', zipPercent: 0 };
+      batchChunkSize: 500, // 500 items per ZIP volume to guarantee low RAM usage
+      onProgress: (current, total, volInfo) => {
+        const curStatus = {
+          isExporting: true,
+          isFinished: false,
+          progress: current,
+          total,
+          phase: 'rendering',
+          zipPercent: 0,
+          currentVolume: volInfo?.currentVolume || 1,
+          totalVolumes: volInfo?.totalVolumes || 1
+        };
         setLocalExportStatus(curStatus);
         if (setExportStatus) setExportStatus(curStatus);
       },
-      onZipProgress: (percent) => {
-        const packingStatus = { isExporting: true, isFinished: false, progress: selectedRowsToExport.length, total: selectedRowsToExport.length, phase: 'packing', zipPercent: percent };
+      onZipProgress: (percent, currentFile, volInfo) => {
+        const packingStatus = {
+          isExporting: true,
+          isFinished: false,
+          progress: selectedRowsToExport.length,
+          total: selectedRowsToExport.length,
+          phase: 'packing',
+          zipPercent: percent,
+          currentZipFile: currentFile,
+          currentVolume: volInfo?.currentVolume || 1,
+          totalVolumes: volInfo?.totalVolumes || 1
+        };
         setLocalExportStatus(packingStatus);
         if (setExportStatus) setExportStatus(packingStatus);
       },
@@ -508,20 +541,13 @@ export default function LayoutStudio({ onStartExport, setExportStatus, onProgres
       return;
     }
 
-    const blobUrl = URL.createObjectURL(zipBlob);
-    const link = document.createElement('a');
-    link.href = blobUrl;
-    link.download = 'Certificates_Batch_Export.zip';
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-
-    // Instantly clean up memory allocated for generated photos & zip blob
-    setTimeout(() => {
-      URL.revokeObjectURL(blobUrl);
-    }, 1000);
-
-    const finalStatus = { isExporting: false, isFinished: true, progress: selectedRowsToExport.length, total: selectedRowsToExport.length };
+    const finalStatus = {
+      isExporting: false,
+      isFinished: true,
+      progress: selectedRowsToExport.length,
+      total: selectedRowsToExport.length,
+      phase: 'complete'
+    };
     setLocalExportStatus(finalStatus);
     if (setExportStatus) setExportStatus(finalStatus);
   };
@@ -1389,38 +1415,6 @@ export default function LayoutStudio({ onStartExport, setExportStatus, onProgres
             {dataFileName && (
               <span className="text-[10px] text-slate-400 block truncate">{dataFileName}</span>
             )}
-
-            {/* Export Resolution / Quality Picker */}
-            <div className="space-y-2 pt-2 border-t border-slate-800/60">
-              <div className="flex items-center justify-between text-xs">
-                <span className="text-slate-400 font-medium">Export Resolution:</span>
-                <select
-                  value={exportResolution}
-                  onChange={(e) => setExportResolution(Number(e.target.value))}
-                  className="select-dark text-xs py-1 px-2 border-slate-700 bg-slate-950 font-semibold text-amber-300"
-                >
-                  <option value={2560}>Ultra 2.5K (2560px)</option>
-                  <option value={1920}>Full HD 1080p (1920px - Fast)</option>
-                  <option value={1280}>Compact (1280px - Super Fast)</option>
-                </select>
-              </div>
-
-              {/* Safe Memory Mode (Prevents Mobile Crashes) */}
-              <label className="flex items-center justify-between p-2 rounded-xl bg-slate-950 border border-slate-800 cursor-pointer hover:border-slate-700 transition-colors">
-                <div className="space-y-0.5 pr-2">
-                  <span className="text-[11px] font-bold text-amber-300 block">Safe Memory Mode</span>
-                  <span className="text-[9.5px] text-slate-400 block leading-tight">
-                    Throttles RAM usage to prevent mobile browser crashes on large HD batches.
-                  </span>
-                </div>
-                <input
-                  type="checkbox"
-                  checked={safeMemoryMode}
-                  onChange={(e) => setSafeMemoryMode(e.target.checked)}
-                  className="w-4 h-4 accent-amber-500 rounded cursor-pointer"
-                />
-              </label>
-            </div>
           </div>
 
           {/* ZIP Folder Hierarchy & Sorting Options */}
@@ -1559,13 +1553,79 @@ export default function LayoutStudio({ onStartExport, setExportStatus, onProgres
             )}
           </div>
 
+          {/* Export Resolution & Performance Settings */}
+          <div className="glass-panel p-4 space-y-3 border-amber-500/30">
+            <div className="flex items-center justify-between border-b border-slate-800/80 pb-2">
+              <h3 className="font-bold text-xs text-amber-300 uppercase tracking-wider flex items-center gap-1.5">
+                <Sliders className="w-3.5 h-3.5 text-amber-400" /> Export Quality & Memory
+              </h3>
+            </div>
+
+            {/* Resolution Dropdown */}
+            <div className="space-y-1">
+              <label className="text-[11px] font-semibold text-slate-400 block">Export Resolution:</label>
+              <select
+                value={exportResolution}
+                onChange={(e) => setExportResolution(Number(e.target.value))}
+                className="w-full text-xs py-2 px-3 font-semibold text-amber-300 bg-slate-950 border border-slate-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-500/40 cursor-pointer shadow-sm"
+              >
+                <option value={0}>Original (100% Native Quality)</option>
+                <option value={2560}>Ultra 2.5K (2560px Max)</option>
+                <option value={1920}>Full HD 1080p (1920px Max)</option>
+                <option value={1280}>Compact (1280px Max - Fast)</option>
+              </select>
+            </div>
+
+            {/* Safe Memory Mode Toggle */}
+            <div className="space-y-2 pt-2 border-t border-slate-800/60">
+              <label className="flex items-center justify-between p-2.5 rounded-xl bg-slate-950 border border-slate-800 cursor-pointer hover:border-slate-700 transition-colors">
+                <div className="space-y-0.5 pr-2">
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[11px] font-bold text-amber-300">Safe Memory Mode</span>
+                    <span className="text-[9px] font-mono font-bold px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                      Mobile Safe
+                    </span>
+                  </div>
+                  <span className="text-[10px] text-slate-400 block leading-tight">
+                    Throttles RAM usage & sweeps memory to prevent mobile crashes.
+                  </span>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={safeMemoryMode}
+                  onChange={(e) => setSafeMemoryMode(e.target.checked)}
+                  className="w-4 h-4 accent-amber-500 rounded cursor-pointer flex-shrink-0"
+                />
+              </label>
+
+              {/* Detailed Instructions on Safe Mode */}
+              <div className="p-3 rounded-xl bg-slate-950/80 border border-slate-800 space-y-2 text-[10.5px]">
+                <div className="flex items-center gap-1.5 text-amber-400 font-bold">
+                  <HelpCircle className="w-3.5 h-3.5 text-amber-400 flex-shrink-0" />
+                  <span>Safe Memory Mode Guide:</span>
+                </div>
+                <div className="space-y-1.5 text-slate-300 leading-relaxed">
+                  <p>
+                    <strong className="text-amber-300">How it works:</strong> Introduces 60ms Garbage Collection breaks every 5 records and immediately destroys offscreen GPU canvas textures to prevent memory buildup.
+                  </p>
+                  <p>
+                    <strong className="text-emerald-400">When to ENABLE:</strong> Exporting large datasets (50+ items) on mobile phones, iPads/tablets, or low-RAM devices, or when exporting at Original (100% Native) quality.
+                  </p>
+                  <p>
+                    <strong className="text-slate-400">When to DISABLE:</strong> Exporting on high-spec Desktop PCs for up to 3x faster generation speed.
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
+
           {/* Actions at the bottom */}
           <div className="space-y-2 pt-2">
             <button onClick={handleDownloadSinglePreview} disabled={!currentLayout} className="btn-secondary text-xs w-full justify-center disabled:opacity-40">
               Download Preview PNG
             </button>
             <button
-              onClick={handleGenerateBatchZip}
+              onClick={handleInitiateBatchZip}
               disabled={layouts.length === 0 || rows.length === 0 || selectedRowIndices.size === 0 || localExportStatus.isExporting}
               className="btn-gold text-sm w-full py-3 justify-center shadow-lg shadow-amber-500/20 disabled:opacity-40 font-bold flex items-center gap-2"
             >
@@ -1589,6 +1649,63 @@ export default function LayoutStudio({ onStartExport, setExportStatus, onProgres
         </div>
       </div>
 
+      {/* Large Batch Safe Mode Advisory Modal */}
+      {isLargeBatchModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-fade-in">
+          <div className="bg-slate-900 border border-amber-500/40 w-full max-w-md rounded-2xl shadow-2xl overflow-hidden p-6 space-y-4">
+            <div className="flex items-center gap-3 text-amber-400">
+              <div className="p-3 rounded-xl bg-amber-500/20 border border-amber-500/30">
+                <ShieldAlert className="w-6 h-6 text-amber-400" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-white">Large Batch Optimization Advisory</h3>
+                <p className="text-xs text-amber-300 font-medium">
+                  {(selectedRowIndices.size || rows.length).toLocaleString()} Certificates Selected
+                </p>
+              </div>
+            </div>
+
+            <p className="text-xs text-slate-300 leading-relaxed">
+              You are processing a large batch of <strong>{(selectedRowIndices.size || rows.length).toLocaleString()} certificates</strong>. 
+              Enabling <strong>Safe Memory Mode</strong> is recommended for batches over 100 items to prevent browser memory exhaustion and ensure 100% stable ZIP generation.
+            </p>
+
+            <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 space-y-1.5 text-[11px]">
+              <div className="flex items-center justify-between text-amber-300 font-bold">
+                <span>Recommended Setup:</span>
+              </div>
+              <ul className="list-disc list-inside text-slate-400 space-y-1">
+                <li><strong>Safe Memory Mode:</strong> Enabled (Prevents memory leaks & crashes)</li>
+                <li><strong>ZIP Streaming:</strong> Fast STORE Mode Enabled</li>
+              </ul>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-2">
+              <button
+                onClick={() => {
+                  setSafeMemoryMode(true);
+                  setIsLargeBatchModalOpen(false);
+                  setTimeout(() => handleGenerateBatchZip(), 50);
+                }}
+                className="btn-gold text-xs py-2.5 justify-center font-bold flex items-center gap-1.5 shadow-md shadow-amber-500/20"
+              >
+                <ShieldCheck className="w-4 h-4 text-slate-950" />
+                <span>Enable Safe & Start</span>
+              </button>
+              <button
+                onClick={() => {
+                  setIsLargeBatchModalOpen(false);
+                  setTimeout(() => handleGenerateBatchZip(), 50);
+                }}
+                className="btn-secondary text-xs py-2.5 justify-center text-slate-300 hover:text-white"
+              >
+                Proceed Fast
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Batch Generation Progress & Loading Modal */}
       {(localExportStatus.isExporting || localExportStatus.isFinished) && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-fade-in">
@@ -1602,14 +1719,29 @@ export default function LayoutStudio({ onStartExport, setExportStatus, onProgres
                 </div>
 
                 <div className="space-y-1">
+                  {localExportStatus.totalVolumes > 1 && (
+                    <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30 text-[10px] font-mono font-bold mb-1">
+                      <span>ZIP Volume {localExportStatus.currentVolume || 1} of {localExportStatus.totalVolumes}</span>
+                    </div>
+                  )}
+
                   <h3 className="text-lg font-bold text-white">
-                    {localExportStatus.phase === 'packing' ? 'Packing ZIP Archive...' : 'Generating Batch Certificates'}
+                    {localExportStatus.phase === 'packing' 
+                      ? (localExportStatus.totalVolumes > 1 ? `Packing Volume ${localExportStatus.currentVolume} of ${localExportStatus.totalVolumes}...` : 'Packing ZIP Archive...')
+                      : 'Generating Batch Certificates'}
                   </h3>
                   <p className="text-xs text-slate-400 font-mono">
                     {localExportStatus.phase === 'packing'
                       ? `Compressing & packaging ZIP file (${localExportStatus.zipPercent || 0}%)...`
                       : `Rendering certificate ${localExportStatus.progress} of ${localExportStatus.total}...`}
                   </p>
+
+                  {/* Live File Packing Ticker */}
+                  {localExportStatus.phase === 'packing' && localExportStatus.currentZipFile && (
+                    <div className="mt-2 p-2 rounded-xl bg-slate-950 border border-slate-800 text-[11px] font-mono text-amber-300 truncate shadow-inner">
+                      📦 Packing: {localExportStatus.currentZipFile}
+                    </div>
+                  )}
                 </div>
 
                 {/* Progress Bar & Percentage */}

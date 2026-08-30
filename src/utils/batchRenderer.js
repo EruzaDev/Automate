@@ -15,7 +15,7 @@ export async function renderRecordToCanvas(dataRow, layout, canvas, stageWidth =
   let height = rawHeight;
   let resScale = 1.0;
 
-  if (maxDimension && (rawWidth > maxDimension || rawHeight > maxDimension)) {
+  if (maxDimension && maxDimension > 0 && (rawWidth > maxDimension || rawHeight > maxDimension)) {
     resScale = maxDimension / Math.max(rawWidth, rawHeight);
     width = Math.round(rawWidth * resScale);
     height = Math.round(rawHeight * resScale);
@@ -165,11 +165,11 @@ export async function exportLayoutsToZip({
   folderStructureMode = 'combined',
   maxDimension = 2560,
   safeMemoryMode = false,
+  batchChunkSize = 500, // Maximum items per ZIP file volume to keep RAM low
   onProgress,
   onZipProgress,
   shouldCancel
 }) {
-  const zip = new JSZip();
   const exportCanvas = document.createElement('canvas');
 
   const resolveLayoutForRow = (row) => {
@@ -186,96 +186,131 @@ export async function exportLayoutsToZip({
     });
   };
 
-  for (let i = 0; i < rows.length; i++) {
+  const total = rows.length;
+  const chunkSize = (batchChunkSize && batchChunkSize > 0) ? batchChunkSize : 500;
+  const totalVolumes = Math.ceil(total / chunkSize);
+
+  for (let vol = 0; vol < totalVolumes; vol++) {
     if (shouldCancel && shouldCancel()) {
       break;
     }
 
-    const row = rows[i];
-    const layout = resolveLayoutForRow(row);
+    const volStart = vol * chunkSize;
+    const volEnd = Math.min((vol + 1) * chunkSize, total);
+    const volumeZip = new JSZip();
 
-    if (layout) {
-      await renderRecordToCanvas(row, layout, exportCanvas, 620, maxDimension);
-      
-      const blob = await getCanvasBlob(exportCanvas);
+    for (let i = volStart; i < volEnd; i++) {
+      if (shouldCancel && shouldCancel()) {
+        break;
+      }
 
-      // Reset export canvas backing store to free GPU texture RAM immediately
-      exportCanvas.width = 0;
-      exportCanvas.height = 0;
+      const row = rows[i];
+      const layout = resolveLayoutForRow(row);
 
-      // Formulate filename
-      const nameHint = row.last_name && row.first_name
-        ? `${row.last_name}_${row.first_name}`
-        : row.name || row.first_name || row[Object.keys(row)[0]] || `record_${i + 1}`;
+      if (layout) {
+        await renderRecordToCanvas(row, layout, exportCanvas, 620, maxDimension);
+        
+        const blob = await getCanvasBlob(exportCanvas);
 
-      const safeName = String(nameHint)
-        .replace(/[^a-z0-9\-_ ]/gi, '')
-        .trim()
-        .replace(/\s+/g, '_') || `record_${i + 1}`;
+        // Reset export canvas backing store to free GPU texture RAM immediately
+        exportCanvas.width = 0;
+        exportCanvas.height = 0;
 
-      // Build folder hierarchy path if folderSortColumns is provided
-      let zipFilePath = `${safeName}_${i + 1}.png`;
-      if (Array.isArray(folderSortColumns) && folderSortColumns.length > 0) {
-        const folderSegments = folderSortColumns
-          .map((colKey) => {
-            const rawVal = row[colKey];
-            const cleanVal = String(rawVal !== undefined && rawVal !== null ? rawVal : '')
-              .trim()
-              .replace(/[\/\\?%*:|"<>]/g, '');
-            return cleanVal || 'Uncategorized';
-          })
-          .filter(Boolean);
+        // Formulate filename
+        const nameHint = row.last_name && row.first_name
+          ? `${row.last_name}_${row.first_name}`
+          : row.name || row.first_name || row[Object.keys(row)[0]] || `record_${i + 1}`;
 
-        if (folderSegments.length > 0) {
-          if (folderStructureMode === 'nested') {
-            zipFilePath = `${folderSegments.join('/')}/${safeName}_${i + 1}.png`;
-          } else {
-            // Combined Folder Mode: e.g. "BSCS 1 B"
-            const combinedFolderName = folderSegments.join(' ');
-            zipFilePath = `${combinedFolderName}/${safeName}_${i + 1}.png`;
+        const safeName = String(nameHint)
+          .replace(/[^a-z0-9\-_ ]/gi, '')
+          .trim()
+          .replace(/\s+/g, '_') || `record_${i + 1}`;
+
+        // Build folder hierarchy path if folderSortColumns is provided
+        let zipFilePath = `${safeName}_${i + 1}.png`;
+        if (Array.isArray(folderSortColumns) && folderSortColumns.length > 0) {
+          const folderSegments = folderSortColumns
+            .map((colKey) => {
+              const rawVal = row[colKey];
+              const cleanVal = String(rawVal !== undefined && rawVal !== null ? rawVal : '')
+                .trim()
+                .replace(/[\/\\?%*:|"<>]/g, '');
+              return cleanVal || 'Uncategorized';
+            })
+            .filter(Boolean);
+
+          if (folderSegments.length > 0) {
+            if (folderStructureMode === 'nested') {
+              zipFilePath = `${folderSegments.join('/')}/${safeName}_${i + 1}.png`;
+            } else {
+              // Combined Folder Mode: e.g. "BSCS 1 B"
+              const combinedFolderName = folderSegments.join(' ');
+              zipFilePath = `${combinedFolderName}/${safeName}_${i + 1}.png`;
+            }
           }
+        }
+
+        if (blob) {
+          volumeZip.file(zipFilePath, blob);
         }
       }
 
-      if (blob) {
-        zip.file(zipFilePath, blob);
+      if (onProgress) {
+        onProgress(i + 1, total, { currentVolume: vol + 1, totalVolumes });
       }
+
+      // Adaptive yielding: Longer pauses every 5 records in safe memory mode or large batch
+      const isChunkBoundary = (i + 1) % 5 === 0;
+      const pauseMs = safeMemoryMode || total > 50
+        ? (isChunkBoundary ? 60 : 15)
+        : 8;
+
+      await new Promise((resolve) => setTimeout(resolve, pauseMs));
     }
 
-    if (onProgress) {
-      onProgress(i + 1, rows.length);
+    if (shouldCancel && shouldCancel()) {
+      exportCanvas.width = 0;
+      exportCanvas.height = 0;
+      return;
     }
 
-    // Adaptive yielding: Longer pauses every 5 records in safe memory mode or large batch
-    const isChunkBoundary = (i + 1) % 5 === 0;
-    const pauseMs = safeMemoryMode || rows.length > 50
-      ? (isChunkBoundary ? 60 : 15)
-      : 8;
-
-    await new Promise((resolve) => setTimeout(resolve, pauseMs));
-  }
-
-  if (shouldCancel && shouldCancel()) {
-    exportCanvas.width = 0;
-    exportCanvas.height = 0;
-    return;
-  }
-
-  const content = await zip.generateAsync(
-    {
-      type: 'blob',
-      compression: 'STORE',
-      streamFiles: true
-    },
-    (metadata) => {
-      if (onZipProgress) {
-        onZipProgress(Math.round(metadata.percent));
+    // Generate Volume ZIP
+    const zipContent = await volumeZip.generateAsync(
+      {
+        type: 'blob',
+        compression: 'STORE',
+        streamFiles: true
+      },
+      (metadata) => {
+        if (onZipProgress) {
+          onZipProgress(Math.round(metadata.percent), metadata.currentFile || '', { currentVolume: vol + 1, totalVolumes });
+        }
       }
-    }
-  );
+    );
+
+    // Auto Download Volume ZIP File
+    const zipFileName = totalVolumes > 1
+      ? `Certificates_Part_${vol + 1}_of_${totalVolumes}_(${volStart + 1}-${volEnd}).zip`
+      : 'Certificates_Batch_Export.zip';
+
+    const blobUrl = URL.createObjectURL(zipContent);
+    const link = document.createElement('a');
+    link.href = blobUrl;
+    link.download = zipFileName;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+
+    // Revoke URL object & pause 150ms for Garbage Collection sweep before next volume
+    setTimeout(() => {
+      URL.revokeObjectURL(blobUrl);
+    }, 1000);
+
+    await new Promise((resolve) => setTimeout(resolve, 150));
+  }
 
   exportCanvas.width = 0;
   exportCanvas.height = 0;
 
-  return content;
+  return true;
 }

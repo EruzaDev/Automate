@@ -46,7 +46,7 @@ export async function exportBatchToZip({
   let targetHeight = height;
   let scaleRatio = 1.0;
 
-  if (maxDimension && (width > maxDimension || height > maxDimension)) {
+  if (maxDimension && maxDimension > 0 && (width > maxDimension || height > maxDimension)) {
     scaleRatio = maxDimension / Math.max(width, height);
     targetWidth = Math.round(width * scaleRatio);
     targetHeight = Math.round(height * scaleRatio);
@@ -172,7 +172,7 @@ export async function exportBatchToZip({
     },
     (metadata) => {
       if (onZipProgress) {
-        onZipProgress(Math.round(metadata.percent));
+        onZipProgress(Math.round(metadata.percent), metadata.currentFile || '');
       }
     }
   );
