@@ -1,5 +1,5 @@
 import React, { useState, useRef } from 'react';
-import { Layout, Plus, Trash2, FileSpreadsheet, Download, Type, QrCode, Sliders, ArrowUp, ArrowDown, FolderPlus, Bold, Italic, Strikethrough, Underline, MessageSquare, Search, Table, Eye, CheckCircle, Loader2, CheckSquare, Square } from 'lucide-react';
+import { Layout, Plus, Trash2, FileSpreadsheet, Download, Type, QrCode, Sliders, ArrowUp, ArrowDown, FolderPlus, FolderTree, Bold, Italic, Strikethrough, Underline, MessageSquare, Search, Table, Eye, CheckCircle, Loader2, CheckSquare, Square } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import InteractiveStage from './InteractiveStage';
 import CSVDataEditorModal from '../Shared/CSVDataEditorModal';
@@ -11,6 +11,28 @@ export default function LayoutStudio({ onStartExport, setExportStatus, onProgres
   const [layouts, setLayouts] = useState([]);
   const [currentLayoutId, setCurrentLayoutId] = useState(null);
   const [layoutColumnKey, setLayoutColumnKey] = useState('template');
+
+  // Folder Hierarchy Sort State
+  const [folderSortColumns, setFolderSortColumns] = useState([]);
+
+  const handleAddFolderSortColumn = (colKey) => {
+    if (!colKey || folderSortColumns.includes(colKey)) return;
+    setFolderSortColumns((prev) => [...prev, colKey]);
+  };
+
+  const handleRemoveFolderSortColumn = (colKey) => {
+    setFolderSortColumns((prev) => prev.filter((c) => c !== colKey));
+  };
+
+  const handleMoveFolderSortColumn = (index, direction) => {
+    const next = [...folderSortColumns];
+    const targetIdx = direction === 'up' ? index - 1 : index + 1;
+    if (targetIdx < 0 || targetIdx >= next.length) return;
+    const temp = next[index];
+    next[index] = next[targetIdx];
+    next[targetIdx] = temp;
+    setFolderSortColumns(next);
+  };
 
   // Local Batch Export Progress & Loading State
   const [localExportStatus, setLocalExportStatus] = useState({
@@ -459,6 +481,7 @@ export default function LayoutStudio({ onStartExport, setExportStatus, onProgres
       rows: selectedRowsToExport,
       layouts,
       layoutColumnKey,
+      folderSortColumns,
       onProgress: (current, total) => {
         const curStatus = { isExporting: true, isFinished: false, progress: current, total };
         setLocalExportStatus(curStatus);
@@ -532,9 +555,12 @@ export default function LayoutStudio({ onStartExport, setExportStatus, onProgres
         return;
       }
 
-      // Escape key to deselect field
-      if (e.key === 'Escape') {
-        setSelectedFieldId(null);
+      // Deselect Field (Enter / Escape)
+      if ((e.key === 'Enter' && !e.ctrlKey && !e.metaKey) || e.key === 'Escape') {
+        if (selectedFieldId) {
+          e.preventDefault();
+          setSelectedFieldId(null);
+        }
         return;
       }
 
@@ -1351,6 +1377,108 @@ export default function LayoutStudio({ onStartExport, setExportStatus, onProgres
 
             {dataFileName && (
               <span className="text-[10px] text-slate-400 block truncate">{dataFileName}</span>
+            )}
+          </div>
+
+          {/* ZIP Folder Hierarchy & Sorting Options */}
+          <div className="glass-panel p-4 space-y-3 border-amber-500/30">
+            <div className="flex items-center justify-between">
+              <h3 className="font-bold text-xs text-amber-300 uppercase tracking-wider flex items-center gap-1.5">
+                <FolderTree className="w-3.5 h-3.5 text-amber-400" /> Zip Folder Hierarchy
+              </h3>
+              {folderSortColumns.length > 0 && (
+                <button
+                  onClick={() => setFolderSortColumns([])}
+                  className="text-[10px] text-red-400 hover:underline"
+                >
+                  Clear Folders
+                </button>
+              )}
+            </div>
+            <p className="text-[11px] text-slate-400 leading-normal">
+              Organize exported certificates into nested folders in the ZIP file based on column values.
+            </p>
+
+            {/* Active Folder Priority List */}
+            {folderSortColumns.length > 0 && (
+              <div className="space-y-1.5">
+                {folderSortColumns.map((col, idx) => (
+                  <div
+                    key={col}
+                    className="flex items-center justify-between p-2 rounded-xl bg-slate-950 border border-slate-800 text-xs"
+                  >
+                    <div className="flex items-center gap-2 overflow-hidden">
+                      <span className="text-[10px] font-mono font-bold px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 flex-shrink-0">
+                        Level {idx + 1}
+                      </span>
+                      <span className="font-semibold truncate text-slate-200">{col}</span>
+                    </div>
+
+                    <div className="flex items-center gap-1 flex-shrink-0">
+                      {idx > 0 && (
+                        <button
+                          onClick={() => handleMoveFolderSortColumn(idx, 'up')}
+                          className="p-1 rounded hover:bg-slate-800 text-slate-400 hover:text-white"
+                          title="Move Priority Up"
+                        >
+                          <ArrowUp className="w-3 h-3" />
+                        </button>
+                      )}
+                      {idx < folderSortColumns.length - 1 && (
+                        <button
+                          onClick={() => handleMoveFolderSortColumn(idx, 'down')}
+                          className="p-1 rounded hover:bg-slate-800 text-slate-400 hover:text-white"
+                          title="Move Priority Down"
+                        >
+                          <ArrowDown className="w-3 h-3" />
+                        </button>
+                      )}
+                      <button
+                        onClick={() => handleRemoveFolderSortColumn(col)}
+                        className="p-1 rounded hover:bg-slate-800 text-red-400 hover:text-red-300 ml-1"
+                        title="Remove Folder Level"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Column Picker Dropdown */}
+            {headers.filter((h) => !folderSortColumns.includes(h)).length > 0 ? (
+              <select
+                value=""
+                onChange={(e) => {
+                  handleAddFolderSortColumn(e.target.value);
+                  e.target.value = '';
+                }}
+                className="select-dark text-xs w-full py-1.5"
+                disabled={rows.length === 0}
+              >
+                <option value="" disabled>
+                  {rows.length === 0 ? 'Upload dataset to add folder levels...' : '+ Add Folder Hierarchy Level...'}
+                </option>
+                {headers
+                  .filter((h) => !folderSortColumns.includes(h))
+                  .map((h) => (
+                    <option key={h} value={h}>
+                      Subfolder by: {h}
+                    </option>
+                  ))}
+              </select>
+            ) : (
+              <span className="text-[10px] text-slate-500 block italic text-center">
+                All columns added to folder structure
+              </span>
+            )}
+
+            {/* Folder Structure Preview Path */}
+            {folderSortColumns.length > 0 && (
+              <div className="p-2 rounded-lg bg-amber-500/10 border border-amber-500/20 text-[10px] font-mono text-amber-300 truncate">
+                ZIP / {folderSortColumns.map((c) => `{${c}}`).join(' / ')} / Certificate.png
+              </div>
             )}
           </div>
 

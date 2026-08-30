@@ -20,6 +20,7 @@ export default function KeyboardShortcutsModal({ isOpen, onClose }) {
       title: 'Certificate Layout Studio',
       icon: <Layout className="w-4 h-4 text-amber-400" />,
       items: [
+        { keys: ['Enter'], label: 'Deselect Active Canvas Box' },
         { keys: ['Delete'], label: 'Delete Selected Canvas Box' },
         { keys: ['Ctrl', 'D'], label: 'Duplicate Selected Canvas Box' },
         { keys: ['↑', '↓', '←', '→'], label: 'Nudge Selected Box position (1%)' },

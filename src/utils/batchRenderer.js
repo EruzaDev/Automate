@@ -161,6 +161,7 @@ export async function exportLayoutsToZip({
   rows,
   layouts,
   layoutColumnKey = '',
+  folderSortColumns = [],
   maxDimension = 2560,
   onProgress,
   shouldCancel
@@ -205,8 +206,26 @@ export async function exportLayoutsToZip({
         .trim()
         .replace(/\s+/g, '_') || `record_${i + 1}`;
 
+      // Build folder hierarchy path if folderSortColumns is provided
+      let zipFilePath = `${safeName}_${i + 1}.png`;
+      if (Array.isArray(folderSortColumns) && folderSortColumns.length > 0) {
+        const folderSegments = folderSortColumns
+          .map((colKey) => {
+            const rawVal = row[colKey];
+            const cleanVal = String(rawVal !== undefined && rawVal !== null ? rawVal : '')
+              .trim()
+              .replace(/[\/\\?%*:|"<>]/g, '_');
+            return cleanVal || 'Uncategorized';
+          })
+          .filter(Boolean);
+
+        if (folderSegments.length > 0) {
+          zipFilePath = `${folderSegments.join('/')}/${safeName}_${i + 1}.png`;
+        }
+      }
+
       if (blob) {
-        zip.file(`${safeName}_${i + 1}.png`, blob);
+        zip.file(zipFilePath, blob);
       }
     }
 
