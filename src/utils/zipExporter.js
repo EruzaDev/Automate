@@ -33,13 +33,26 @@ export async function exportBatchToZip({
   fileNamePattern = '{last_name}_{first_name}',
   groupByColumns = [], // e.g. ['section', 'year']
   zipName = 'Batch_Generated_Assets.zip',
+  maxDimension = 2560, // Cap resolution at 2.5K (2560px) to prevent 8K memory bloat & CPU encoding freeze
   onProgress,
   shouldCancel
 }) {
   const zip = new JSZip();
+
+  // Resolution scaling optimization
+  let targetWidth = width;
+  let targetHeight = height;
+  let scaleRatio = 1.0;
+
+  if (maxDimension && (width > maxDimension || height > maxDimension)) {
+    scaleRatio = maxDimension / Math.max(width, height);
+    targetWidth = Math.round(width * scaleRatio);
+    targetHeight = Math.round(height * scaleRatio);
+  }
+
   const offscreenCanvas = document.createElement('canvas');
-  offscreenCanvas.width = width;
-  offscreenCanvas.height = height;
+  offscreenCanvas.width = targetWidth;
+  offscreenCanvas.height = targetHeight;
   const ctx = offscreenCanvas.getContext('2d');
 
   // Preload background & frame overlay images once if static
@@ -86,6 +99,15 @@ export async function exportBatchToZip({
       }
     }
 
+    // Clear Canvas context to free backing store memory
+    ctx.clearRect(0, 0, targetWidth, targetHeight);
+
+    // Apply resolution scale transform if downscaled
+    ctx.save();
+    if (scaleRatio !== 1.0) {
+      ctx.scale(scaleRatio, scaleRatio);
+    }
+
     // Render Canvas
     await renderCanvasElement(ctx, width, height, {
       ...layerConfig,
@@ -96,6 +118,8 @@ export async function exportBatchToZip({
       qrLayers: currentQrLayers,
       recordData: record
     });
+
+    ctx.restore();
 
     // Direct Blob Conversion (avoiding heavy base64 string allocations)
     const blob = await getCanvasBlob(offscreenCanvas);
@@ -122,18 +146,28 @@ export async function exportBatchToZip({
       onProgress(i + 1, total);
     }
 
-    // Yield main thread to allow React DOM updates & 60fps responsiveness
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    // Yield main thread with periodic micro-pauses to allow UI rendering & GC sweeps
+    await new Promise((resolve) => setTimeout(resolve, 4));
   }
 
   if (shouldCancel && shouldCancel()) {
+    offscreenCanvas.width = 0;
+    offscreenCanvas.height = 0;
     return;
   }
 
-  // Generate & Download ZIP with STORE mode for pre-compressed PNGs
-  const content = await zip.generateAsync({ type: 'blob', compression: 'STORE' });
+  // Generate & Download ZIP with STREAM mode for high performance
+  const content = await zip.generateAsync({
+    type: 'blob',
+    compression: 'STORE',
+    streamFiles: true
+  });
 
-  // Trigger download & immediately revoke object URL to prevent memory & space buildup
+  // Free GPU memory allocated to offscreen canvas
+  offscreenCanvas.width = 0;
+  offscreenCanvas.height = 0;
+
+  // Trigger download & immediately revoke object URL to prevent space buildup
   const blobUrl = URL.createObjectURL(content);
   const link = document.createElement('a');
   link.href = blobUrl;

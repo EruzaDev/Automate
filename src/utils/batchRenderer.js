@@ -5,28 +5,45 @@ import { evaluateFieldText } from './multiColumnEvaluator';
 import { parseRichTextTokens, stripRichTextFormatting } from './richTextParser';
 
 // Render a single record row on a high-resolution export canvas with exact proportional scale matching stage viewport
-export async function renderRecordToCanvas(dataRow, layout, canvas, stageWidth = 620) {
+export async function renderRecordToCanvas(dataRow, layout, canvas, stageWidth = 620, maxDimension = 2560) {
   if (!layout || !layout.image) return canvas;
 
-  const ctx = canvas.getContext('2d');
-  const width = layout.image.naturalWidth || layout.image.width || 1200;
-  const height = layout.image.naturalHeight || layout.image.height || 800;
+  const rawWidth = layout.image.naturalWidth || layout.image.width || 1200;
+  const rawHeight = layout.image.naturalHeight || layout.image.height || 800;
+
+  let width = rawWidth;
+  let height = rawHeight;
+  let resScale = 1.0;
+
+  if (maxDimension && (rawWidth > maxDimension || rawHeight > maxDimension)) {
+    resScale = maxDimension / Math.max(rawWidth, rawHeight);
+    width = Math.round(rawWidth * resScale);
+    height = Math.round(rawHeight * resScale);
+  }
 
   canvas.width = width;
   canvas.height = height;
 
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, width, height);
+
+  ctx.save();
+  if (resScale !== 1.0) {
+    ctx.scale(resScale, resScale);
+  }
+
   // Draw layout background image
-  ctx.drawImage(layout.image, 0, 0, width, height);
+  ctx.drawImage(layout.image, 0, 0, rawWidth, rawHeight);
 
   // Proportional resolution scale ratio relative to interactive stage canvas (stageWidth = 620px)
-  const scaleRatio = width / (stageWidth || 620);
+  const scaleRatio = rawWidth / (stageWidth || 620);
 
   // Draw each field bounding box onto canvas
   for (const field of layout.fields || []) {
-    const boxX = field.xPct * width;
-    const boxY = field.yPct * height;
-    const boxW = field.wPct * width;
-    const boxH = field.hPct * height;
+    const boxX = field.xPct * rawWidth;
+    const boxY = field.yPct * rawHeight;
+    const boxW = field.wPct * rawWidth;
+    const boxH = field.hPct * rawHeight;
 
     if (field.type === 'text') {
       const text = evaluateFieldText(field, dataRow);
@@ -135,6 +152,7 @@ export async function renderRecordToCanvas(dataRow, layout, canvas, stageWidth =
     }
   }
 
+  ctx.restore();
   return canvas;
 }
 
@@ -143,6 +161,7 @@ export async function exportLayoutsToZip({
   rows,
   layouts,
   layoutColumnKey = '',
+  maxDimension = 2560,
   onProgress,
   shouldCancel
 }) {
@@ -172,7 +191,7 @@ export async function exportLayoutsToZip({
     const layout = resolveLayoutForRow(row);
 
     if (layout) {
-      await renderRecordToCanvas(row, layout, exportCanvas, 620);
+      await renderRecordToCanvas(row, layout, exportCanvas, 620, maxDimension);
       
       const blob = await getCanvasBlob(exportCanvas);
 
@@ -195,10 +214,24 @@ export async function exportLayoutsToZip({
       onProgress(i + 1, rows.length);
     }
 
-    // Yield main thread to allow React to paint DOM & prevent UI freeze
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    // Yield main thread with periodic micro-pauses to allow UI rendering & GC sweeps
+    await new Promise((resolve) => setTimeout(resolve, 4));
   }
 
-  const content = await zip.generateAsync({ type: 'blob', compression: 'STORE' });
+  if (shouldCancel && shouldCancel()) {
+    exportCanvas.width = 0;
+    exportCanvas.height = 0;
+    return;
+  }
+
+  const content = await zip.generateAsync({
+    type: 'blob',
+    compression: 'STORE',
+    streamFiles: true
+  });
+
+  exportCanvas.width = 0;
+  exportCanvas.height = 0;
+
   return content;
 }
