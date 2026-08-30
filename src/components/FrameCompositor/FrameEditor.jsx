@@ -97,11 +97,15 @@ export default function FrameEditor({ onStartExport, setExportStatus, onProgress
     });
   };
 
+  const cancelExportRef = useRef(false);
+
   const handleBatchExport = async () => {
     if (docImages.length === 0) {
       alert('Please upload documentation photos first!');
       return;
     }
+
+    cancelExportRef.current = false;
 
     onStartExport();
     setExportStatus({ isExporting: true, isFinished: false, progress: 0, total: docImages.length });
@@ -126,8 +130,14 @@ export default function FrameEditor({ onStartExport, setExportStatus, onProgress
       zipName: 'Framed_Documentation_Batch.zip',
       onProgress: (current, total) => {
         setExportStatus((prev) => ({ ...prev, progress: current }));
-      }
+      },
+      shouldCancel: () => cancelExportRef.current
     });
+
+    if (cancelExportRef.current) {
+      setExportStatus({ isExporting: false, isFinished: false, progress: 0, total: 0 });
+      return;
+    }
 
     setExportStatus((prev) => ({ ...prev, isExporting: false, isFinished: true }));
   };
@@ -144,7 +154,7 @@ export default function FrameEditor({ onStartExport, setExportStatus, onProgress
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         {/* Left Side Controls */}
-        <div className="lg:col-span-5 space-y-5">
+        <div className="lg:col-span-5 md:col-span-12 space-y-5">
           {/* Step 1: Frame Overlay */}
           <div className="glass-panel p-5 space-y-4">
             <div className="flex items-center gap-2">
@@ -279,7 +289,7 @@ export default function FrameEditor({ onStartExport, setExportStatus, onProgress
         </div>
 
         {/* Right Preview Viewport */}
-        <div className="lg:col-span-7 space-y-4">
+        <div className="lg:col-span-7 md:col-span-12 space-y-4">
           <div className="glass-panel p-5 space-y-4 sticky top-20">
             <div className="flex items-center justify-between">
               <h3 className="font-bold text-base text-white">Framed Output Preview</h3>

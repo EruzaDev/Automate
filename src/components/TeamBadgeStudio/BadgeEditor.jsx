@@ -145,11 +145,15 @@ export default function BadgeEditor({ onStartExport, setExportStatus }) {
     updateSelectedLayer({ fallbackRules: updatedRules });
   };
 
+  const cancelExportRef = useRef(false);
+
   const handleBatchExport = async () => {
     if (records.length === 0) {
       alert('Please load team records first!');
       return;
     }
+
+    cancelExportRef.current = false;
 
     onStartExport();
     setExportStatus({ isExporting: true, isFinished: false, progress: 0, total: records.length });
@@ -169,8 +173,14 @@ export default function BadgeEditor({ onStartExport, setExportStatus }) {
       zipName: 'Team_Badges_QR_Batch.zip',
       onProgress: (current, total) => {
         setExportStatus((prev) => ({ ...prev, progress: current }));
-      }
+      },
+      shouldCancel: () => cancelExportRef.current
     });
+
+    if (cancelExportRef.current) {
+      setExportStatus({ isExporting: false, isFinished: false, progress: 0, total: 0 });
+      return;
+    }
 
     setExportStatus((prev) => ({ ...prev, isExporting: false, isFinished: true }));
   };
@@ -201,7 +211,7 @@ export default function BadgeEditor({ onStartExport, setExportStatus }) {
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         {/* Left Side Controls */}
-        <div className="lg:col-span-5 space-y-5">
+        <div className="lg:col-span-5 md:col-span-12 space-y-5">
           {/* Step 1: Source */}
           <CsvUploader
             onDataLoaded={(parsedRecords, parsedHeaders) => {
@@ -405,7 +415,7 @@ export default function BadgeEditor({ onStartExport, setExportStatus }) {
         </div>
 
         {/* Right Preview Viewport */}
-        <div className="lg:col-span-7 space-y-4">
+        <div className="lg:col-span-7 md:col-span-12 space-y-4">
           <div className="glass-panel p-5 space-y-4 sticky top-20">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <h3 className="font-bold text-base text-white">Live Team Badge Preview</h3>

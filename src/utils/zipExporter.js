@@ -33,7 +33,8 @@ export async function exportBatchToZip({
   fileNamePattern = '{last_name}_{first_name}',
   groupByColumns = [], // e.g. ['section', 'year']
   zipName = 'Batch_Generated_Assets.zip',
-  onProgress
+  onProgress,
+  shouldCancel
 }) {
   const zip = new JSZip();
   const offscreenCanvas = document.createElement('canvas');
@@ -50,9 +51,19 @@ export async function exportBatchToZip({
     ? await loadImage(layerConfig.frameOverlayImage)
     : layerConfig.frameOverlayImage;
 
+  const getCanvasBlob = (canvas) => {
+    return new Promise((resolve) => {
+      canvas.toBlob((blob) => resolve(blob), 'image/png');
+    });
+  };
+
   const total = records.length;
 
   for (let i = 0; i < total; i++) {
+    if (shouldCancel && shouldCancel()) {
+      break;
+    }
+
     const record = records[i];
 
     // Load record-specific doc image if any
@@ -86,9 +97,8 @@ export async function exportBatchToZip({
       recordData: record
     });
 
-    // Convert canvas to Data URL / Blob
-    const dataUrl = offscreenCanvas.toDataURL('image/png');
-    const base64Data = dataUrl.replace(/^data:image\/png;base64,/, '');
+    // Direct Blob Conversion (avoiding heavy base64 string allocations)
+    const blob = await getCanvasBlob(offscreenCanvas);
 
     // Determine File Path & Folder Structure
     let subFolderPath = '';
@@ -104,14 +114,23 @@ export async function exportBatchToZip({
     const filename = formatFileName(fileNamePattern, record, i) + '.png';
     const fullZipPath = subFolderPath + filename;
 
-    zip.file(fullZipPath, base64Data, { base64: true });
+    if (blob) {
+      zip.file(fullZipPath, blob);
+    }
 
     if (onProgress) {
       onProgress(i + 1, total);
     }
+
+    // Yield main thread to allow React DOM updates & 60fps responsiveness
+    await new Promise((resolve) => setTimeout(resolve, 0));
   }
 
-  // Generate & Download ZIP
-  const content = await zip.generateAsync({ type: 'blob' });
+  if (shouldCancel && shouldCancel()) {
+    return;
+  }
+
+  // Generate & Download ZIP with STORE mode for pre-compressed PNGs
+  const content = await zip.generateAsync({ type: 'blob', compression: 'STORE' });
   saveAs(content, zipName);
 }

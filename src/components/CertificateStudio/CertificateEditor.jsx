@@ -158,12 +158,16 @@ export default function CertificateEditor({ onStartExport, setExportStatus }) {
     updateSelectedLayer({ x: Math.round(canvasDimensions.width / 2) });
   };
 
+  const cancelExportRef = useRef(false);
+
   // Batch Export Trigger
   const handleBatchExport = async () => {
     if (records.length === 0) {
       alert('Please load record data first!');
       return;
     }
+
+    cancelExportRef.current = false;
 
     onStartExport();
     setExportStatus({ isExporting: true, isFinished: false, progress: 0, total: records.length });
@@ -181,8 +185,14 @@ export default function CertificateEditor({ onStartExport, setExportStatus }) {
       zipName: 'Certificates_Batch.zip',
       onProgress: (current, total) => {
         setExportStatus((prev) => ({ ...prev, progress: current }));
-      }
+      },
+      shouldCancel: () => cancelExportRef.current
     });
+
+    if (cancelExportRef.current) {
+      setExportStatus({ isExporting: false, isFinished: false, progress: 0, total: 0 });
+      return;
+    }
 
     setExportStatus((prev) => ({ ...prev, isExporting: false, isFinished: true }));
   };

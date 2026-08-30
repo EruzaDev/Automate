@@ -143,7 +143,8 @@ export async function exportLayoutsToZip({
   rows,
   layouts,
   layoutColumnKey = '',
-  onProgress
+  onProgress,
+  shouldCancel
 }) {
   const zip = new JSZip();
   const exportCanvas = document.createElement('canvas');
@@ -156,14 +157,24 @@ export async function exportLayoutsToZip({
     return match || layouts[0];
   };
 
+  const getCanvasBlob = (canvas) => {
+    return new Promise((resolve) => {
+      canvas.toBlob((blob) => resolve(blob), 'image/png');
+    });
+  };
+
   for (let i = 0; i < rows.length; i++) {
+    if (shouldCancel && shouldCancel()) {
+      break;
+    }
+
     const row = rows[i];
     const layout = resolveLayoutForRow(row);
 
     if (layout) {
       await renderRecordToCanvas(row, layout, exportCanvas, 620);
-      const dataUrl = exportCanvas.toDataURL('image/png');
-      const base64Data = dataUrl.split(',')[1];
+      
+      const blob = await getCanvasBlob(exportCanvas);
 
       // Formulate filename
       const nameHint = row.last_name && row.first_name
@@ -175,14 +186,19 @@ export async function exportLayoutsToZip({
         .trim()
         .replace(/\s+/g, '_') || `record_${i + 1}`;
 
-      zip.file(`${safeName}_${i + 1}.png`, base64Data, { base64: true });
+      if (blob) {
+        zip.file(`${safeName}_${i + 1}.png`, blob);
+      }
     }
 
     if (onProgress) {
       onProgress(i + 1, rows.length);
     }
+
+    // Yield main thread to allow React to paint DOM & prevent UI freeze
+    await new Promise((resolve) => setTimeout(resolve, 0));
   }
 
-  const content = await zip.generateAsync({ type: 'blob' });
+  const content = await zip.generateAsync({ type: 'blob', compression: 'STORE' });
   return content;
 }

@@ -135,6 +135,39 @@ export default function InteractiveStage({
     window.addEventListener('mouseup', onMouseUp);
   };
 
+  // Touch Drag Support for Tablets & Touch Devices
+  const handleTouchStartDrag = (e, field) => {
+    e.stopPropagation();
+    onSelectField(field.id);
+    if (!e.touches || e.touches.length === 0) return;
+
+    const startX = e.touches[0].clientX;
+    const startY = e.touches[0].clientY;
+    const origXPct = field.xPct;
+    const origYPct = field.yPct;
+
+    const onTouchMove = (moveEvent) => {
+      if (!moveEvent.touches || moveEvent.touches.length === 0) return;
+      const dx = (moveEvent.touches[0].clientX - startX) / stageWidth;
+      const dy = (moveEvent.touches[0].clientY - startY) / stageHeight;
+
+      const rawX = Math.max(0, Math.min(1 - field.wPct, origXPct + dx));
+      const rawY = Math.max(0, Math.min(1 - field.hPct, origYPct + dy));
+
+      const snapped = applySnapping(rawX, rawY, field.wPct, field.hPct);
+      onUpdateField(field.id, { xPct: snapped.x, yPct: snapped.y });
+    };
+
+    const onTouchEnd = () => {
+      setSnapLines({ showX: false, showY: false, xPos: 0, yPos: 0 });
+      window.removeEventListener('touchmove', onTouchMove);
+      window.removeEventListener('touchend', onTouchEnd);
+    };
+
+    window.addEventListener('touchmove', onTouchMove);
+    window.addEventListener('touchend', onTouchEnd);
+  };
+
   // Handle Handle Drag (Resizing Bounding Box)
   const handleMouseDownResize = (e, field) => {
     e.stopPropagation();
@@ -163,6 +196,37 @@ export default function InteractiveStage({
 
     window.addEventListener('mousemove', onMouseMove);
     window.addEventListener('mouseup', onMouseUp);
+  };
+
+  // Touch Resize Support for Tablets & Touch Devices
+  const handleTouchStartResize = (e, field) => {
+    e.stopPropagation();
+    onSelectField(field.id);
+    if (!e.touches || e.touches.length === 0) return;
+
+    const startX = e.touches[0].clientX;
+    const startY = e.touches[0].clientY;
+    const origWPct = field.wPct;
+    const origHPct = field.hPct;
+
+    const onTouchMove = (moveEvent) => {
+      if (!moveEvent.touches || moveEvent.touches.length === 0) return;
+      const dw = (moveEvent.touches[0].clientX - startX) / stageWidth;
+      const dh = (moveEvent.touches[0].clientY - startY) / stageHeight;
+
+      const newWPct = Math.max(0.04, Math.min(1 - field.xPct, origWPct + dw));
+      const newHPct = Math.max(0.03, Math.min(1 - field.yPct, origHPct + dh));
+
+      onUpdateField(field.id, { wPct: newWPct, hPct: newHPct });
+    };
+
+    const onTouchEnd = () => {
+      window.removeEventListener('touchmove', onTouchMove);
+      window.removeEventListener('touchend', onTouchEnd);
+    };
+
+    window.addEventListener('touchmove', onTouchMove);
+    window.addEventListener('touchend', onTouchEnd);
   };
 
   // Quick Snap Button Helpers
@@ -254,16 +318,17 @@ export default function InteractiveStage({
       )}
 
       {/* Stage Canvas Viewport */}
-      <div
-        ref={stageRef}
-        className="relative bg-white shadow-2xl rounded-lg overflow-hidden border border-slate-700 select-none"
-        style={{
-          width: `${stageWidth}px`,
-          height: `${stageHeight}px`,
-          backgroundImage: 'repeating-conic-gradient(#f1f5f9 0% 25%, transparent 0% 50%)',
-          backgroundSize: '16px 16px'
-        }}
-      >
+      <div className="w-full overflow-x-auto flex justify-center py-1 max-w-full">
+        <div
+          ref={stageRef}
+          className="relative bg-white shadow-2xl rounded-lg overflow-hidden border border-slate-700 select-none touch-none flex-shrink-0"
+          style={{
+            width: `${stageWidth}px`,
+            height: `${stageHeight}px`,
+            backgroundImage: 'repeating-conic-gradient(#f1f5f9 0% 25%, transparent 0% 50%)',
+            backgroundSize: '16px 16px'
+          }}
+        >
         {/* Layout Background Image */}
         <img
           src={currentLayout.dataURL}
@@ -324,6 +389,7 @@ export default function InteractiveStage({
             <div
               key={field.id}
               onMouseDown={(e) => handleMouseDownDrag(e, field)}
+              onTouchStart={(e) => handleTouchStartDrag(e, field)}
               className={`absolute cursor-move flex items-center overflow-hidden border-2 transition-all ${
                 field.type === 'qr'
                   ? 'border-purple-500 bg-purple-500/10'
@@ -385,17 +451,19 @@ export default function InteractiveStage({
                 </div>
               )}
 
-              {/* Bottom-Right Canva Resize Handle */}
+              {/* Bottom-Right Canva Resize Handle (Optimized for Mouse & Touch) */}
               {isSelected && (
                 <div
                   onMouseDown={(e) => handleMouseDownResize(e, field)}
-                  className="absolute -right-1.5 -bottom-1.5 w-4 h-4 bg-amber-400 border-2 border-white rounded-full cursor-nwse-resize hover:scale-125 transition-transform z-30 shadow-md ring-2 ring-amber-500/50"
+                  onTouchStart={(e) => handleTouchStartResize(e, field)}
+                  className="absolute -right-2 -bottom-2 w-5 h-5 sm:w-4 sm:h-4 bg-amber-400 border-2 border-white rounded-full cursor-nwse-resize hover:scale-125 transition-transform z-30 shadow-md ring-2 ring-amber-500/50"
                   title="Drag to resize box"
                 />
               )}
             </div>
           );
         })}
+        </div>
       </div>
     </div>
   );

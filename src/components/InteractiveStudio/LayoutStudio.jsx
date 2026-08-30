@@ -391,9 +391,13 @@ export default function LayoutStudio({ onStartExport, setExportStatus, onProgres
     link.click();
   };
 
+  const cancelExportRef = useRef(false);
+
   // Export Batch ZIP
   const handleGenerateBatchZip = async () => {
     if (layouts.length === 0 || rows.length === 0) return;
+
+    cancelExportRef.current = false;
 
     if (onStartExport) onStartExport();
     const initialStatus = { isExporting: true, isFinished: false, progress: 0, total: rows.length };
@@ -408,8 +412,16 @@ export default function LayoutStudio({ onStartExport, setExportStatus, onProgres
         const curStatus = { isExporting: true, isFinished: false, progress: current, total };
         setLocalExportStatus(curStatus);
         if (setExportStatus) setExportStatus(curStatus);
-      }
+      },
+      shouldCancel: () => cancelExportRef.current
     });
+
+    if (cancelExportRef.current) {
+      const cancelledStatus = { isExporting: false, isFinished: false, progress: 0, total: 0 };
+      setLocalExportStatus(cancelledStatus);
+      if (setExportStatus) setExportStatus(cancelledStatus);
+      return;
+    }
 
     const link = document.createElement('a');
     link.href = URL.createObjectURL(zipBlob);
@@ -456,7 +468,7 @@ export default function LayoutStudio({ onStartExport, setExportStatus, onProgres
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         {/* LEFT PANEL: Layout Templates & Field Manager */}
-        <div className="lg:col-span-3 space-y-4">
+        <div className="lg:col-span-3 md:col-span-4 space-y-4">
           {/* Custom Font Upload */}
           <div className="glass-panel p-4 space-y-3">
             <h3 className="font-bold text-xs text-slate-300 uppercase tracking-wider flex items-center justify-between">
@@ -595,7 +607,7 @@ export default function LayoutStudio({ onStartExport, setExportStatus, onProgres
         </div>
 
         {/* CENTER PANEL: Interactive Canvas Viewport */}
-        <div className="lg:col-span-6 space-y-4">
+        <div className="lg:col-span-6 md:col-span-8 space-y-4">
           <div className="glass-panel p-4 space-y-3 sticky top-20">
             <div className="flex items-center justify-between flex-wrap gap-2">
               <h3 className="font-bold text-sm text-white flex items-center gap-2">
@@ -650,7 +662,7 @@ export default function LayoutStudio({ onStartExport, setExportStatus, onProgres
         </div>
 
         {/* RIGHT PANEL: Canva-Style Field Inspector & Custom Formatting */}
-        <div className="lg:col-span-3 space-y-4">
+        <div className="lg:col-span-3 md:col-span-12 space-y-4">
           <div className="glass-panel p-4 space-y-3">
             <div className="flex items-center justify-between border-b border-slate-800 pb-2">
               <h3 className="font-bold text-xs text-amber-300 uppercase tracking-wider flex items-center gap-1.5">
@@ -1153,6 +1165,15 @@ export default function LayoutStudio({ onStartExport, setExportStatus, onProgres
                     <span>{localExportStatus.progress} / {localExportStatus.total}</span>
                   </div>
                 </div>
+
+                <button
+                  onClick={() => {
+                    cancelExportRef.current = true;
+                  }}
+                  className="btn-secondary text-xs py-1.5 px-4 text-red-400 hover:text-red-300 border-red-500/30 font-bold"
+                >
+                  Cancel Export
+                </button>
               </>
             ) : (
               <>
