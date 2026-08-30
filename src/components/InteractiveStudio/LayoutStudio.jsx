@@ -492,8 +492,154 @@ export default function LayoutStudio({ onStartExport, setExportStatus, onProgres
     if (setExportStatus) setExportStatus(finalStatus);
   };
 
+  // Keyboard Shortcuts for LayoutStudio
+  React.useEffect(() => {
+    const handleKeyDown = (e) => {
+      const target = e.target;
+      const isInputFocused =
+        ['INPUT', 'TEXTAREA', 'SELECT'].includes(target?.tagName) ||
+        target?.isContentEditable;
+
+      if (isInputFocused) return;
+
+      // Duplicate Selected Box (Ctrl + D / Cmd + D)
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'd') {
+        e.preventDefault();
+        if (selectedFieldId && currentLayout) {
+          const fieldToDup = currentLayout.fields.find((f) => f.id === selectedFieldId);
+          if (fieldToDup) {
+            const newField = {
+              ...fieldToDup,
+              id: `f-${Date.now()}`,
+              xPct: Math.min(0.8, fieldToDup.xPct + 0.04),
+              yPct: Math.min(0.8, fieldToDup.yPct + 0.04)
+            };
+            setLayouts((prev) =>
+              prev.map((l) => (l.id === currentLayoutId ? { ...l, fields: [...l.fields, newField] } : l))
+            );
+            setSelectedFieldId(newField.id);
+          }
+        }
+        return;
+      }
+
+      // Delete Selected Box (Delete / Backspace)
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        if (selectedFieldId) {
+          e.preventDefault();
+          handleDeleteField(selectedFieldId);
+        }
+        return;
+      }
+
+      // Escape key to deselect field
+      if (e.key === 'Escape') {
+        setSelectedFieldId(null);
+        return;
+      }
+
+      // Trigger Batch ZIP Export (Ctrl + Enter / Cmd + Enter)
+      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+        e.preventDefault();
+        handleGenerateBatchZip();
+        return;
+      }
+
+      // Arrow Key Nudging for Selected Box
+      if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
+        if (selectedFieldId && selectedField) {
+          e.preventDefault();
+          const step = e.shiftKey ? 0.05 : 0.01;
+          let dx = 0;
+          let dy = 0;
+          if (e.key === 'ArrowLeft') dx = -step;
+          if (e.key === 'ArrowRight') dx = step;
+          if (e.key === 'ArrowUp') dy = -step;
+          if (e.key === 'ArrowDown') dy = step;
+
+          const newX = Math.max(0, Math.min(1 - selectedField.wPct, selectedField.xPct + dx));
+          const newY = Math.max(0, Math.min(1 - selectedField.hPct, selectedField.yPct + dy));
+          handleUpdateField(selectedField.id, { xPct: newX, yPct: newY });
+          return;
+        }
+
+        // Record switcher when no field selected
+        if (!selectedFieldId && rows.length > 0) {
+          if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
+            e.preventDefault();
+            setPreviewRowIndex((prev) => (prev > 0 ? prev - 1 : rows.length - 1));
+          } else if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
+            e.preventDefault();
+            setPreviewRowIndex((prev) => (prev < rows.length - 1 ? prev + 1 : 0));
+          }
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [selectedFieldId, currentLayout, selectedField, rows, currentLayoutId]);
+
+  // Drag and drop target for LayoutStudio
+  const [isDragOverStudio, setIsDragOverStudio] = useState(false);
+
+  const handleStudioDragOver = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!isDragOverStudio) setIsDragOverStudio(true);
+  };
+
+  const handleStudioDragLeave = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.currentTarget.contains(e.relatedTarget)) return;
+    setIsDragOverStudio(false);
+  };
+
+  const handleStudioDrop = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragOverStudio(false);
+
+    const files = Array.from(e.dataTransfer.files || []);
+    if (files.length === 0) return;
+
+    const csvOrExcel = files.find((f) => /\.(csv|xlsx|xls)$/i.test(f.name));
+    const fontFiles = files.filter((f) => /\.(ttf|otf|woff|woff2)$/i.test(f.name));
+    const imageFiles = files.filter((f) => /\.(png|jpg|jpeg|webp|gif|svg|bmp)$/i.test(f.name));
+
+    if (csvOrExcel) {
+      handleDataFileUpload({ target: { files: [csvOrExcel] } });
+    }
+    if (fontFiles.length > 0) {
+      handleCustomFontUpload({ target: { files: fontFiles } });
+    }
+    if (imageFiles.length > 0) {
+      handleLayoutFilesUpload({ target: { files: imageFiles } });
+    }
+  };
+
   return (
-    <div className="space-y-6 animate-fade-in">
+    <div
+      onDragOver={handleStudioDragOver}
+      onDragLeave={handleStudioDragLeave}
+      onDrop={handleStudioDrop}
+      className={`space-y-6 animate-fade-in relative transition-all duration-200 rounded-3xl ${
+        isDragOverStudio ? 'ring-4 ring-amber-400/60 bg-amber-500/5' : ''
+      }`}
+    >
+      {/* Drag & Drop Visual Overlay */}
+      {isDragOverStudio && (
+        <div className="absolute inset-0 z-50 bg-slate-950/80 backdrop-blur-sm rounded-3xl border-2 border-dashed border-amber-400 flex flex-col items-center justify-center gap-3 p-8 animate-fade-in pointer-events-none">
+          <div className="w-16 h-16 rounded-2xl bg-amber-500/20 text-amber-400 flex items-center justify-center border border-amber-500/40 animate-bounce">
+            <Layout className="w-8 h-8" />
+          </div>
+          <h3 className="text-xl font-bold text-amber-300">Drop Files to Load into Certificate Studio</h3>
+          <p className="text-xs text-slate-300 text-center max-w-md">
+            Drop <strong className="text-white">Images</strong> for Layout Backgrounds, <strong className="text-white">CSV/Excel</strong> for recipient data, or <strong className="text-white">Fonts (.ttf/.otf)</strong>.
+          </p>
+        </div>
+      )}
       {/* CSV Data Table Editor Modal */}
       <CSVDataEditorModal
         isOpen={isDataEditorOpen}

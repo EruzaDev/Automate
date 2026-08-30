@@ -1,9 +1,10 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import Navbar from './components/Shared/Navbar';
 import LayoutStudio from './components/InteractiveStudio/LayoutStudio';
 import FrameEditor from './components/FrameCompositor/FrameEditor';
 import BatchProgressBar from './components/Shared/BatchProgressBar';
 import UnsavedWarningModal from './components/Shared/UnsavedWarningModal';
+import KeyboardShortcutsModal from './components/Shared/KeyboardShortcutsModal';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('interactive');
@@ -11,12 +12,15 @@ export default function App() {
   const [isWarningOpen, setIsWarningOpen] = useState(false);
   const [hasProgress, setHasProgress] = useState(false);
 
+  // Keyboard Shortcuts Modal State
+  const [isShortcutsOpen, setIsShortcutsOpen] = useState(false);
+
   // Global Theme State ('dark' | 'light')
   const [theme, setTheme] = useState(() => {
     return localStorage.getItem('autogen_theme') || 'dark';
   });
 
-  React.useEffect(() => {
+  useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
     localStorage.setItem('autogen_theme', theme);
   }, [theme]);
@@ -24,6 +28,45 @@ export default function App() {
   const toggleTheme = () => {
     setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'));
   };
+
+  // Global Hotkey Listener (Ctrl+1, Ctrl+2, Ctrl+Shift+D, ?)
+  useEffect(() => {
+    const handleGlobalKeyDown = (e) => {
+      const target = e.target;
+      const isInputFocused =
+        ['INPUT', 'TEXTAREA', 'SELECT'].includes(target?.tagName) ||
+        target?.isContentEditable;
+
+      // Toggle Shortcuts Help Modal on '?' (Shift + /)
+      if (e.key === '?' && !isInputFocused) {
+        e.preventDefault();
+        setIsShortcutsOpen((prev) => !prev);
+        return;
+      }
+
+      // Tab Navigation (Ctrl + 1 / Ctrl + 2)
+      if ((e.ctrlKey || e.metaKey) && e.key === '1') {
+        e.preventDefault();
+        setActiveTab('interactive');
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key === '2') {
+        e.preventDefault();
+        setActiveTab('frames');
+        return;
+      }
+
+      // Theme Toggle (Ctrl + Shift + D)
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'd') {
+        e.preventDefault();
+        toggleTheme();
+        return;
+      }
+    };
+
+    window.addEventListener('keydown', handleGlobalKeyDown);
+    return () => window.removeEventListener('keydown', handleGlobalKeyDown);
+  }, []);
 
   // Batch Export Progress Modal State
   const [exportStatus, setExportStatus] = useState({
@@ -106,6 +149,7 @@ export default function App() {
         onLoadPresetData={handleLoadPresetData}
         theme={theme}
         onToggleTheme={toggleTheme}
+        onOpenShortcuts={() => setIsShortcutsOpen(true)}
       />
 
       {/* Main Viewport */}
@@ -157,6 +201,12 @@ export default function App() {
         targetTabName={tabNames[pendingTab] || pendingTab}
         onConfirm={handleConfirmTabChange}
         onCancel={handleCancelTabChange}
+      />
+
+      {/* Keyboard Shortcuts Guide Modal */}
+      <KeyboardShortcutsModal
+        isOpen={isShortcutsOpen}
+        onClose={() => setIsShortcutsOpen(false)}
       />
     </div>
   );

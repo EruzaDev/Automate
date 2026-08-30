@@ -200,6 +200,87 @@ export default function FrameEditor({ onStartExport, setExportStatus, onProgress
     }
   };
 
+  // Keyboard Shortcuts for FrameEditor
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      const target = e.target;
+      const isInputFocused =
+        ['INPUT', 'TEXTAREA', 'SELECT'].includes(target?.tagName) ||
+        target?.isContentEditable;
+
+      if (isInputFocused) return;
+
+      // Batch Export Hotkey (Ctrl + Enter / Cmd + Enter)
+      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+        e.preventDefault();
+        handleBatchExport();
+        return;
+      }
+
+      // Select All / Deselect All Photos (Ctrl + A / Cmd + A)
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') {
+        e.preventDefault();
+        if (selectedPhotoIds.size === docImages.length && docImages.length > 0) {
+          handleDeselectAllPhotos();
+        } else {
+          handleSelectAllPhotos();
+        }
+        return;
+      }
+
+      // Cycle Photo Preview (Up / Down, [ / ])
+      if (['ArrowUp', 'ArrowDown', '[', ']'].includes(e.key) && docImages.length > 0) {
+        e.preventDefault();
+        if (e.key === 'ArrowUp' || e.key === '[') {
+          setActiveDocIdx((prev) => (prev > 0 ? prev - 1 : docImages.length - 1));
+        } else if (e.key === 'ArrowDown' || e.key === ']') {
+          setActiveDocIdx((prev) => (prev < docImages.length - 1 ? prev + 1 : 0));
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [docImages, selectedPhotoIds, frameImgObj, canvasSize, docAlignment, autoClearPhotos]);
+
+  // Drag and Drop State & Handlers for FrameEditor
+  const [isDragOverFrameEditor, setIsDragOverFrameEditor] = useState(false);
+  const [isDragOverFrameZone, setIsDragOverFrameZone] = useState(false);
+
+  const handleFrameEditorDragOver = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!isDragOverFrameEditor) setIsDragOverFrameEditor(true);
+  };
+
+  const handleFrameEditorDragLeave = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.currentTarget.contains(e.relatedTarget)) return;
+    setIsDragOverFrameEditor(false);
+  };
+
+  const handleFrameEditorDrop = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragOverFrameEditor(false);
+    setIsDragOverFrameZone(false);
+
+    const files = Array.from(e.dataTransfer.files || []);
+    if (files.length === 0) return;
+
+    const imageFiles = files.filter((f) => /\.(png|jpg|jpeg|webp|gif|svg|bmp)$/i.test(f.name));
+    if (imageFiles.length === 0) return;
+
+    // If only 1 file is dropped and contains 'frame' or transparent png, check if frame or batch
+    if (imageFiles.length === 1 && /frame|border|overlay/i.test(imageFiles[0].name)) {
+      handleFrameUpload({ target: { files: [imageFiles[0]] } });
+    } else {
+      // Treat dropped image files as documentation batch
+      handleBatchDocUpload({ target: { files: imageFiles } });
+    }
+  };
+
   // Virtual list windowing parameters (only renders items currently in sight)
   const ITEM_HEIGHT = 60; // 52px item height + 8px gap
   const CONTAINER_HEIGHT = 224; // max-h-56 = 14rem = 224px
@@ -215,7 +296,26 @@ export default function FrameEditor({ onStartExport, setExportStatus, onProgress
   const visibleDocImages = docImages.slice(virtStartIndex, virtEndIndex);
 
   return (
-    <div className="space-y-6 animate-fade-in">
+    <div
+      onDragOver={handleFrameEditorDragOver}
+      onDragLeave={handleFrameEditorDragLeave}
+      onDrop={handleFrameEditorDrop}
+      className={`space-y-6 animate-fade-in relative transition-all duration-200 rounded-3xl ${
+        isDragOverFrameEditor ? 'ring-4 ring-purple-500/60 bg-purple-500/5' : ''
+      }`}
+    >
+      {/* Drag & Drop Visual Overlay */}
+      {isDragOverFrameEditor && (
+        <div className="absolute inset-0 z-50 bg-slate-950/80 backdrop-blur-sm rounded-3xl border-2 border-dashed border-purple-400 flex flex-col items-center justify-center gap-3 p-8 animate-fade-in pointer-events-none">
+          <div className="w-16 h-16 rounded-2xl bg-purple-500/20 text-purple-400 flex items-center justify-center border border-purple-500/40 animate-bounce">
+            <ImageIcon className="w-8 h-8" />
+          </div>
+          <h3 className="text-xl font-bold text-purple-300">Drop Images to Load into Framing Studio</h3>
+          <p className="text-xs text-slate-300 text-center max-w-md">
+            Drop transparent <strong className="text-white">PNG Frames</strong> or <strong className="text-white">Batch Documentation Photos</strong>.
+          </p>
+        </div>
+      )}
       {/* Clean Header */}
       <div className="glass-panel p-4 flex items-center gap-3 border-purple-500/30">
         <div className="w-9 h-9 rounded-xl bg-purple-500/20 text-purple-500 flex items-center justify-center border border-purple-500/30">

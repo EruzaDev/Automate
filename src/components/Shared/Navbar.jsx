@@ -1,7 +1,7 @@
 import React from 'react';
-import { Image as ImageIcon, LayoutGrid, Sun, Moon } from 'lucide-react';
+import { Image as ImageIcon, LayoutGrid, Sun, Moon, Keyboard } from 'lucide-react';
 
-export default function Navbar({ activeTab, setActiveTab, onLoadPresetData, theme, onToggleTheme }) {
+export default function Navbar({ activeTab, setActiveTab, onLoadPresetData, theme, onToggleTheme, onOpenShortcuts }) {
   return (
     <header className="sticky top-0 z-40 border-b border-slate-800/80 glass-panel !rounded-none backdrop-blur-2xl px-4 lg:px-8 py-3 shadow-2xl transition-colors duration-300">
       <div className="max-w-7xl mx-auto flex items-center justify-between gap-4">
@@ -40,6 +40,17 @@ export default function Navbar({ activeTab, setActiveTab, onLoadPresetData, them
               Automate Framing
             </button>
           </nav>
+
+          {/* Keyboard Shortcuts Help Button */}
+          <button
+            onClick={onOpenShortcuts}
+            className="p-2 rounded-xl border border-indigo-500/30 glass-panel text-indigo-400 hover:border-indigo-400 hover:text-indigo-300 transition-all shadow hover:scale-105 active:scale-95 cursor-pointer flex items-center gap-1 text-xs font-semibold"
+            title="Keyboard Shortcuts & Hotkeys (?)"
+            aria-label="Keyboard Shortcuts"
+          >
+            <Keyboard className="w-5 h-5" />
+            <span className="hidden sm:inline">Shortcuts</span>
+          </button>
 
           {/* Light / Dark Mode Toggle Button */}
           <button

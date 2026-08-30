@@ -4,12 +4,11 @@ import { Upload, FileSpreadsheet, Edit3, CheckCircle2, Loader2 } from 'lucide-re
 
 export default function CsvUploader({ onDataLoaded, onOpenManualEditor, currentRecordCount = 0 }) {
   const [isUploading, setIsUploading] = useState(false);
+  const [isDragOver, setIsDragOver] = useState(false);
   const fileInputRef = useRef(null);
 
-  const handleFileChange = (e) => {
-    const file = e.target.files?.[0];
+  const processFile = (file) => {
     if (!file) return;
-
     setIsUploading(true);
 
     Papa.parse(file, {
@@ -26,8 +25,34 @@ export default function CsvUploader({ onDataLoaded, onOpenManualEditor, currentR
         alert('CSV Parsing Error: ' + err.message);
       }
     });
+  };
 
+  const handleFileChange = (e) => {
+    const file = e.target.files?.[0];
+    processFile(file);
     if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  const handleDragOver = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!isDragOver) setIsDragOver(true);
+  };
+
+  const handleDragLeave = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragOver(false);
+  };
+
+  const handleDrop = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragOver(false);
+    const file = e.dataTransfer.files?.[0];
+    if (file && (file.type.includes('csv') || file.name.endsWith('.csv'))) {
+      processFile(file);
+    }
   };
 
   return (
@@ -54,7 +79,12 @@ export default function CsvUploader({ onDataLoaded, onOpenManualEditor, currentR
         {/* Upload CSV Dropzone */}
         <div
           onClick={() => !isUploading && fileInputRef.current?.click()}
-          className={`dropzone flex flex-col items-center justify-center gap-2 py-4 relative ${
+          onDragOver={handleDragOver}
+          onDragLeave={handleDragLeave}
+          onDrop={handleDrop}
+          className={`dropzone flex flex-col items-center justify-center gap-2 py-4 relative transition-all ${
+            isDragOver ? 'border-amber-400 bg-amber-500/10 scale-[1.02]' : ''
+          } ${
             isUploading ? 'opacity-75 cursor-wait' : 'cursor-pointer'
           }`}
         >
@@ -79,11 +109,13 @@ export default function CsvUploader({ onDataLoaded, onOpenManualEditor, currentR
           ) : (
             <>
               <div className="w-10 h-10 rounded-xl bg-indigo-500/10 text-indigo-500 flex items-center justify-center border border-indigo-500/20">
-                <Upload className="w-5 h-5" />
+                <Upload className="w-5 h-5 text-indigo-500" />
               </div>
               <div className="text-center">
-                <span className="text-xs font-bold text-indigo-500 block">Upload CSV File</span>
-                <span className="text-[10px] text-slate-400">Supports comma/tab separated files</span>
+                <span className="text-xs font-bold text-indigo-500 block">
+                  {isDragOver ? 'Drop CSV File Here' : 'Upload CSV File'}
+                </span>
+                <span className="text-[10px] text-slate-400">Click or drag & drop .csv file</span>
               </div>
             </>
           )}
