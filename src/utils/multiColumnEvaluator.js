@@ -40,7 +40,28 @@ export function evaluateFieldText(field, dataRow = {}) {
       .map((val) => applyCasing(String(val).trim(), field.casing));
 
     const separator = field.separator !== undefined ? field.separator : ' ';
-    rawString = values.join(separator);
+    const position = field.separatorPosition || 'between_all';
+
+    if (values.length === 0) {
+      rawString = '';
+    } else if (values.length === 1) {
+      rawString = values[0];
+    } else if (position === 'after_first') {
+      const first = values[0];
+      const rest = values.slice(1).join(' ');
+      rawString = `${first}${separator}${rest}`;
+    } else if (position === 'before_last') {
+      const front = values.slice(0, -1).join(' ');
+      const last = values[values.length - 1];
+      rawString = `${front}${separator}${last}`;
+    } else if (position === 'custom_index' && field.separatorIndex !== undefined) {
+      const idx = Math.max(1, Math.min(values.length - 1, Number(field.separatorIndex) || 1));
+      const front = values.slice(0, idx).join(' ');
+      const back = values.slice(idx).join(' ');
+      rawString = `${front}${separator}${back}`;
+    } else {
+      rawString = values.join(separator);
+    }
   }
   // Mode 3: Single Column Key
   else if (field.key) {

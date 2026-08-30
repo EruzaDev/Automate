@@ -423,10 +423,18 @@ export default function LayoutStudio({ onStartExport, setExportStatus, onProgres
       return;
     }
 
+    const blobUrl = URL.createObjectURL(zipBlob);
     const link = document.createElement('a');
-    link.href = URL.createObjectURL(zipBlob);
+    link.href = blobUrl;
     link.download = 'Certificates_Batch_Export.zip';
+    document.body.appendChild(link);
     link.click();
+    document.body.removeChild(link);
+
+    // Instantly clean up memory allocated for generated photos & zip blob
+    setTimeout(() => {
+      URL.revokeObjectURL(blobUrl);
+    }, 1000);
 
     const finalStatus = { isExporting: false, isFinished: true, progress: rows.length, total: rows.length };
     setLocalExportStatus(finalStatus);
@@ -857,15 +865,30 @@ export default function LayoutStudio({ onStartExport, setExportStatus, onProgres
                               </div>
                             )}
 
-                            <div>
-                              <label className="text-[10px] font-semibold text-slate-400 block mb-0.5">Separator String:</label>
-                              <input
-                                type="text"
-                                value={selectedField.separator !== undefined ? selectedField.separator : ' '}
-                                onChange={(e) => handleUpdateField(selectedField.id, { separator: e.target.value })}
-                                placeholder="e.g. space, comma, dash"
-                                className="input-dark text-xs font-mono"
-                              />
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                              <div>
+                                <label className="text-[10px] font-semibold text-slate-400 block mb-0.5">Separator String:</label>
+                                <input
+                                  type="text"
+                                  value={selectedField.separator !== undefined ? selectedField.separator : ' '}
+                                  onChange={(e) => handleUpdateField(selectedField.id, { separator: e.target.value })}
+                                  placeholder="e.g. , or -"
+                                  className="input-dark text-xs font-mono"
+                                />
+                              </div>
+
+                              <div>
+                                <label className="text-[10px] font-semibold text-slate-400 block mb-0.5">Separator Position:</label>
+                                <select
+                                  value={selectedField.separatorPosition || 'between_all'}
+                                  onChange={(e) => handleUpdateField(selectedField.id, { separatorPosition: e.target.value })}
+                                  className="select-dark text-xs w-full"
+                                >
+                                  <option value="between_all">Between All (Doe, John, Alex)</option>
+                                  <option value="after_first">After 1st Only (Doe, John Alex)</option>
+                                  <option value="before_last">Before Last Only (John Alex, Doe)</option>
+                                </select>
+                              </div>
                             </div>
                           </div>
                         ) : (

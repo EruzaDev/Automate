@@ -132,5 +132,18 @@ export async function exportBatchToZip({
 
   // Generate & Download ZIP with STORE mode for pre-compressed PNGs
   const content = await zip.generateAsync({ type: 'blob', compression: 'STORE' });
-  saveAs(content, zipName);
+
+  // Trigger download & immediately revoke object URL to prevent memory & space buildup
+  const blobUrl = URL.createObjectURL(content);
+  const link = document.createElement('a');
+  link.href = blobUrl;
+  link.download = zipName;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+
+  // Instantly clean up memory allocated for generated photos & zip blob
+  setTimeout(() => {
+    URL.revokeObjectURL(blobUrl);
+  }, 1000);
 }

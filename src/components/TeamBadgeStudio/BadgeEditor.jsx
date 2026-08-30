@@ -306,6 +306,32 @@ export default function BadgeEditor({ onStartExport, setExportStatus }) {
 
                 <div className="grid grid-cols-2 gap-3">
                   <div>
+                    <label className="text-[11px] font-semibold text-slate-400 block mb-1">Separator String</label>
+                    <input
+                      type="text"
+                      value={selectedLayer.separator !== undefined ? selectedLayer.separator : ' '}
+                      onChange={(e) => updateSelectedLayer({ separator: e.target.value })}
+                      placeholder="e.g. , or -"
+                      className="input-dark text-xs font-mono"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-[11px] font-semibold text-slate-400 block mb-1">Separator Position</label>
+                    <select
+                      value={selectedLayer.separatorPosition || 'between_all'}
+                      onChange={(e) => updateSelectedLayer({ separatorPosition: e.target.value })}
+                      className="select-dark text-xs w-full"
+                    >
+                      <option value="between_all">Between All (Doe, John, Alex)</option>
+                      <option value="after_first">After 1st Only (Doe, John Alex)</option>
+                      <option value="before_last">Before Last Only (John Alex, Doe)</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
                     <label className="text-[11px] font-semibold text-slate-400 block mb-1">Font Size (px)</label>
                     <input
                       type="number"

@@ -40,7 +40,15 @@ export function applyCasing(text, format) {
  */
 export function evaluateMultiColumnText(record, config) {
   if (!config || !record) return '';
-  const { columns = [], order = [], separator = ' ', casing = 'none', fallbackRules = [] } = config;
+  const {
+    columns = [],
+    order = [],
+    separator = ' ',
+    separatorPosition = 'between_all',
+    separatorIndex,
+    casing = 'none',
+    fallbackRules = []
+  } = config;
 
   // Use order if provided, otherwise use columns array order
   const activeOrder = order.length > 0 ? order : columns;
@@ -61,8 +69,29 @@ export function evaluateMultiColumnText(record, config) {
     }
   }
 
-  const result = parts.join(separator);
-  return applyCasing(result, casing);
+  let rawString = '';
+  if (parts.length === 0) {
+    rawString = '';
+  } else if (parts.length === 1) {
+    rawString = parts[0];
+  } else if (separatorPosition === 'after_first') {
+    const first = parts[0];
+    const rest = parts.slice(1).join(' ');
+    rawString = `${first}${separator}${rest}`;
+  } else if (separatorPosition === 'before_last') {
+    const front = parts.slice(0, -1).join(' ');
+    const last = parts[parts.length - 1];
+    rawString = `${front}${separator}${last}`;
+  } else if (separatorPosition === 'custom_index' && separatorIndex !== undefined) {
+    const idx = Math.max(1, Math.min(parts.length - 1, Number(separatorIndex) || 1));
+    const front = parts.slice(0, idx).join(' ');
+    const back = parts.slice(idx).join(' ');
+    rawString = `${front}${separator}${back}`;
+  } else {
+    rawString = parts.join(separator);
+  }
+
+  return applyCasing(rawString, casing);
 }
 
 /**

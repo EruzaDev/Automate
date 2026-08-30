@@ -371,16 +371,29 @@ export default function CertificateEditor({ onStartExport, setExportStatus }) {
                 </div>
 
                 {/* Text Formatting Controls */}
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-3 gap-3">
                   <div>
                     <label className="text-[11px] font-semibold text-slate-400 block mb-1">Separator</label>
                     <input
                       type="text"
-                      value={selectedLayer.separator || ''}
+                      value={selectedLayer.separator !== undefined ? selectedLayer.separator : ' '}
                       onChange={(e) => updateSelectedLayer({ separator: e.target.value })}
-                      placeholder="e.g. space or comma"
-                      className="input-dark text-xs"
+                      placeholder="e.g. , or -"
+                      className="input-dark text-xs font-mono"
                     />
+                  </div>
+
+                  <div>
+                    <label className="text-[11px] font-semibold text-slate-400 block mb-1">Position</label>
+                    <select
+                      value={selectedLayer.separatorPosition || 'between_all'}
+                      onChange={(e) => updateSelectedLayer({ separatorPosition: e.target.value })}
+                      className="select-dark text-xs w-full"
+                    >
+                      <option value="between_all">Between All (Doe, John, Alex)</option>
+                      <option value="after_first">After 1st Only (Doe, John Alex)</option>
+                      <option value="before_last">Before Last Only (John Alex, Doe)</option>
+                    </select>
                   </div>
 
                   <div>
@@ -390,13 +403,15 @@ export default function CertificateEditor({ onStartExport, setExportStatus }) {
                       onChange={(e) => updateSelectedLayer({ casing: e.target.value })}
                       className="select-dark text-xs w-full"
                     >
-                      <option value="none">As Typed</option>
+                      <option value="none">As Is</option>
                       <option value="uppercase">UPPERCASE</option>
-                      <option value="titlecase">Title Case</option>
                       <option value="lowercase">lowercase</option>
+                      <option value="titlecase">Title Case</option>
                     </select>
                   </div>
+                </div>
 
+                <div className="grid grid-cols-2 gap-3">
                   <div>
                     <label className="text-[11px] font-semibold text-slate-400 block mb-1">Font Family</label>
                     <select

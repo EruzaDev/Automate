@@ -14,6 +14,7 @@ export default function FrameEditor({ onStartExport, setExportStatus, onProgress
   const [activeDocImgObj, setActiveDocImgObj] = useState(null);
 
   const [docAlignment, setDocAlignment] = useState('center');
+  const [autoClearPhotos, setAutoClearPhotos] = useState(true);
 
   const canvasRef = useRef(null);
   const frameInputRef = useRef(null);
@@ -140,6 +141,11 @@ export default function FrameEditor({ onStartExport, setExportStatus, onProgress
     }
 
     setExportStatus((prev) => ({ ...prev, isExporting: false, isFinished: true }));
+
+    if (autoClearPhotos) {
+      setDocImages([]);
+      setActiveDocIdx(0);
+    }
   };
 
   return (
@@ -277,15 +283,27 @@ export default function FrameEditor({ onStartExport, setExportStatus, onProgress
             </div>
           </div>
 
-          {/* Export Button moved to bottom */}
-          <button
-            onClick={handleBatchExport}
-            disabled={docImages.length === 0}
-            className="btn-primary text-sm w-full py-3 justify-center shadow-lg shadow-purple-500/20 disabled:opacity-40 font-bold"
-          >
-            <Download className="w-4 h-4" />
-            Export Framed ZIP ({docImages.length} Photos)
-          </button>
+          {/* Export Button & Memory Cleanup Control */}
+          <div className="space-y-2">
+            <button
+              onClick={handleBatchExport}
+              disabled={docImages.length === 0}
+              className="btn-primary text-sm w-full py-3 justify-center shadow-lg shadow-purple-500/20 disabled:opacity-40 font-bold"
+            >
+              <Download className="w-4 h-4" />
+              Export Framed ZIP ({docImages.length} Photos)
+            </button>
+
+            <label className="flex items-center gap-2 text-[11px] text-slate-400 cursor-pointer select-none px-1">
+              <input
+                type="checkbox"
+                checked={autoClearPhotos}
+                onChange={(e) => setAutoClearPhotos(e.target.checked)}
+                className="accent-purple-500 rounded w-3.5 h-3.5"
+              />
+              <span>Auto-clear photo buffer after download (prevents space buildup)</span>
+            </label>
+          </div>
         </div>
 
         {/* Right Preview Viewport */}
