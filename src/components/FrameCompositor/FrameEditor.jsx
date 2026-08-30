@@ -3,7 +3,7 @@ import { Image as ImageIcon, Upload, Layers, Crop, Download, Loader2, CheckSquar
 import { renderCanvasElement, loadImage } from '../../utils/canvasRenderer';
 import { exportBatchToZip } from '../../utils/zipExporter';
 
-export default function FrameEditor({ onStartExport, setExportStatus, onProgressChange }) {
+export default function FrameEditor({ onStartExport, setExportStatus, onProgressChange, onRegisterCancel }) {
   const [frameSrc, setFrameSrc] = useState(null);
   const [frameImgObj, setFrameImgObj] = useState(null);
   const [canvasSize, setCanvasSize] = useState({ width: 1000, height: 1000 });
@@ -145,6 +145,12 @@ export default function FrameEditor({ onStartExport, setExportStatus, onProgress
     }
 
     cancelExportRef.current = false;
+    if (onRegisterCancel) {
+      onRegisterCancel(() => {
+        cancelExportRef.current = true;
+        setExportStatus({ isExporting: false, isFinished: false, progress: 0, total: 0 });
+      });
+    }
 
     onStartExport();
     setExportStatus({ isExporting: true, isFinished: false, progress: 0, total: selectedDocs.length });

@@ -1,8 +1,8 @@
 import React, { useEffect } from 'react';
 import confetti from 'canvas-confetti';
-import { Loader2, CheckCircle2, Download } from 'lucide-react';
+import { Loader2, CheckCircle2, Download, XCircle } from 'lucide-react';
 
-export default function BatchProgressBar({ progress, total, isExporting, isFinished, onClose }) {
+export default function BatchProgressBar({ progress, total, isExporting, isFinished, onClose, onCancel }) {
   useEffect(() => {
     if (isFinished) {
       confetti({
@@ -33,7 +33,7 @@ export default function BatchProgressBar({ progress, total, isExporting, isFinis
             </div>
             <button
               onClick={onClose}
-              className="btn-primary w-full justify-center"
+              className="btn-primary w-full justify-center font-bold"
             >
               <Download className="w-4 h-4" />
               Done
@@ -64,6 +64,16 @@ export default function BatchProgressBar({ progress, total, isExporting, isFinis
                 <span>{progress} / {total} Assets</span>
               </div>
             </div>
+
+            {/* Cancel Button */}
+            {onCancel && (
+              <button
+                onClick={onCancel}
+                className="w-full py-2.5 px-4 rounded-xl bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/30 text-xs font-bold transition-all flex items-center justify-center gap-2 mt-2"
+              >
+                <XCircle className="w-4 h-4" /> Cancel Generation
+              </button>
+            )}
           </>
         )}
       </div>

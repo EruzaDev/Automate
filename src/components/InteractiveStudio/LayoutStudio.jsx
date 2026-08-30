@@ -6,7 +6,7 @@ import CSVDataEditorModal from '../Shared/CSVDataEditorModal';
 import { renderRecordToCanvas, exportLayoutsToZip } from '../../utils/batchRenderer';
 import { loadCustomFontFile, getLoadedCustomFonts } from '../../utils/fontLoader';
 
-export default function LayoutStudio({ onStartExport, setExportStatus, onProgressChange }) {
+export default function LayoutStudio({ onStartExport, setExportStatus, onProgressChange, onRegisterCancel }) {
   // Layout Templates State (Clean start with no sample photos)
   const [layouts, setLayouts] = useState([]);
   const [currentLayoutId, setCurrentLayoutId] = useState(null);
@@ -441,6 +441,14 @@ export default function LayoutStudio({ onStartExport, setExportStatus, onProgres
     }
 
     cancelExportRef.current = false;
+    if (onRegisterCancel) {
+      onRegisterCancel(() => {
+        cancelExportRef.current = true;
+        const resetStatus = { isExporting: false, isFinished: false, progress: 0, total: 0 };
+        setLocalExportStatus(resetStatus);
+        if (setExportStatus) setExportStatus(resetStatus);
+      });
+    }
 
     if (onStartExport) onStartExport();
     const initialStatus = { isExporting: true, isFinished: false, progress: 0, total: selectedRowsToExport.length };

@@ -33,6 +33,19 @@ export default function App() {
     total: 0
   });
 
+  const cancelExportRef = React.useRef(null);
+
+  const handleRegisterCancel = useCallback((cancelFn) => {
+    cancelExportRef.current = cancelFn;
+  }, []);
+
+  const handleCancelExport = useCallback(() => {
+    if (cancelExportRef.current) {
+      cancelExportRef.current();
+    }
+    setExportStatus({ isExporting: false, isFinished: false, progress: 0, total: 0 });
+  }, []);
+
   const tabNames = {
     interactive: 'Certificate Layout Studio',
     frames: 'Frame Compositor'
@@ -102,6 +115,7 @@ export default function App() {
             onStartExport={handleStartExport}
             setExportStatus={setExportStatus}
             onProgressChange={handleProgressChange}
+            onRegisterCancel={handleRegisterCancel}
           />
         )}
 
@@ -110,6 +124,7 @@ export default function App() {
             onStartExport={handleStartExport}
             setExportStatus={setExportStatus}
             onProgressChange={handleProgressChange}
+            onRegisterCancel={handleRegisterCancel}
           />
         )}
       </main>
@@ -133,6 +148,7 @@ export default function App() {
         isExporting={exportStatus.isExporting}
         isFinished={exportStatus.isFinished}
         onClose={handleCloseExportModal}
+        onCancel={handleCancelExport}
       />
 
       {/* Unsaved Progress Warning Modal (Only pops up when hasProgress is true) */}
