@@ -7,7 +7,7 @@
   --bg-card: rgba(15, 23, 42, 0.75);
   --bg-card-hover: rgba(30, 41, 59, 0.85);
   
-  --border-subtle: rgba(255, 255, 255, 0.07);
+  --border-subtle: rgba(255, 255, 255, 0.08);
   --border-accent: rgba(99, 102, 241, 0.35);
   --border-gold: rgba(245, 158, 11, 0.4);
   
@@ -21,8 +21,47 @@
   --text-muted: #94a3b8;
   --text-dim: #64748b;
 
+  --input-bg: rgba(15, 23, 42, 0.85);
+  --input-border: rgba(255, 255, 255, 0.12);
+  --shadow-color: rgba(0, 0, 0, 0.6);
+
+  --bg-radial-gradient: 
+    radial-gradient(ellipse at 15% 10%, rgba(99, 102, 241, 0.15) 0%, transparent 45%),
+    radial-gradient(ellipse at 85% 15%, rgba(217, 70, 239, 0.12) 0%, transparent 45%),
+    radial-gradient(ellipse at 50% 90%, rgba(245, 158, 11, 0.08) 0%, transparent 50%);
+
   font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
   color-scheme: dark;
+}
+
+:root[data-theme="light"] {
+  --bg-dark: #f1f5f9;
+  --bg-surface: #ffffff;
+  --bg-card: rgba(255, 255, 255, 0.88);
+  --bg-card-hover: rgba(248, 250, 252, 0.95);
+  
+  --border-subtle: rgba(15, 23, 42, 0.12);
+  --border-accent: rgba(99, 102, 241, 0.3);
+  --border-gold: rgba(245, 158, 11, 0.5);
+  
+  --primary-accent: #4f46e5;
+  --primary-gradient: linear-gradient(135deg, #4f46e5 0%, #7c3aed 50%, #c026d3 100%);
+  --gold-gradient: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+  
+  --text-main: #0f172a;
+  --text-muted: #475569;
+  --text-dim: #64748b;
+
+  --input-bg: #ffffff;
+  --input-border: rgba(15, 23, 42, 0.18);
+  --shadow-color: rgba(15, 23, 42, 0.08);
+
+  --bg-radial-gradient: 
+    radial-gradient(ellipse at 15% 10%, rgba(99, 102, 241, 0.12) 0%, transparent 45%),
+    radial-gradient(ellipse at 85% 15%, rgba(217, 70, 239, 0.1) 0%, transparent 45%),
+    radial-gradient(ellipse at 50% 90%, rgba(245, 158, 11, 0.08) 0%, transparent 50%);
+
+  color-scheme: light;
 }
 
 * {
@@ -31,15 +70,13 @@
 
 body {
   background-color: var(--bg-dark);
-  background-image: 
-    radial-gradient(ellipse at 15% 10%, rgba(99, 102, 241, 0.15) 0%, transparent 45%),
-    radial-gradient(ellipse at 85% 15%, rgba(217, 70, 239, 0.12) 0%, transparent 45%),
-    radial-gradient(ellipse at 50% 90%, rgba(245, 158, 11, 0.08) 0%, transparent 50%);
+  background-image: var(--bg-radial-gradient);
   background-attachment: fixed;
   color: var(--text-main);
   min-height: 100vh;
   overflow-x: hidden;
   -webkit-font-smoothing: antialiased;
+  transition: background-color 0.3s ease, color 0.3s ease;
 }
 
 /* Custom Scrollbar */
@@ -48,7 +85,7 @@ body {
   height: 7px;
 }
 ::-webkit-scrollbar-track {
-  background: rgba(8, 12, 20, 0.8);
+  background: var(--bg-dark);
 }
 ::-webkit-scrollbar-thumb {
   background: rgba(99, 102, 241, 0.35);
@@ -65,16 +102,16 @@ body {
   -webkit-backdrop-filter: blur(20px);
   border: 1px solid var(--border-subtle);
   border-radius: 20px;
-  box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.6);
-  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  box-shadow: 0 10px 30px -10px var(--shadow-color);
+  transition: background-color 0.3s ease, border-color 0.3s ease, box-shadow 0.3s ease;
 }
 
 .glass-panel:hover {
-  border-color: rgba(255, 255, 255, 0.12);
+  border-color: rgba(99, 102, 241, 0.25);
 }
 
 .glass-panel-accent {
-  background: linear-gradient(145deg, rgba(30, 41, 59, 0.75) 0%, rgba(15, 23, 42, 0.9) 100%);
+  background: var(--bg-card);
   backdrop-filter: blur(20px);
   border: 1px solid var(--border-accent);
   border-radius: 20px;
@@ -105,9 +142,9 @@ body {
 }
 
 .btn-secondary {
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--bg-card);
   color: var(--text-main);
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  border: 1px solid var(--border-subtle);
   font-weight: 600;
   font-size: 0.85rem;
   padding: 0.65rem 1.15rem;
@@ -120,8 +157,8 @@ body {
 }
 
 .btn-secondary:hover {
-  background: rgba(255, 255, 255, 0.12);
-  border-color: rgba(255, 255, 255, 0.25);
+  background: var(--bg-card-hover);
+  border-color: var(--border-accent);
   transform: translateY(-1px);
 }
 
@@ -149,8 +186,8 @@ body {
 
 /* Inputs & Form Elements */
 .input-dark {
-  background: rgba(15, 23, 42, 0.85);
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: var(--input-bg);
+  border: 1px solid var(--input-border);
   color: var(--text-main);
   padding: 0.65rem 0.95rem;
   border-radius: 10px;
@@ -163,12 +200,11 @@ body {
 .input-dark:focus {
   border-color: #818cf8;
   box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.25);
-  background: rgba(15, 23, 42, 0.95);
 }
 
 .select-dark {
-  background: rgba(15, 23, 42, 0.9);
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: var(--input-bg);
+  border: 1px solid var(--input-border);
   color: var(--text-main);
   padding: 0.65rem 0.95rem;
   border-radius: 10px;
@@ -186,7 +222,7 @@ body {
 /* Dropzone */
 .dropzone {
   border: 2px dashed rgba(99, 102, 241, 0.35);
-  background: rgba(15, 23, 42, 0.45);
+  background: var(--bg-card);
   border-radius: 16px;
   padding: 1.75rem 1.25rem;
   text-align: center;
@@ -196,7 +232,7 @@ body {
 
 .dropzone:hover {
   border-color: #818cf8;
-  background: rgba(99, 102, 241, 0.12);
+  background: rgba(99, 102, 241, 0.1);
   transform: scale(1.01);
 }
 
@@ -214,25 +250,25 @@ body {
 
 .badge-indigo {
   background: rgba(99, 102, 241, 0.18);
-  color: #a5b4fc;
+  color: #6366f1;
   border: 1px solid rgba(99, 102, 241, 0.35);
 }
 
 .badge-emerald {
   background: rgba(16, 185, 129, 0.18);
-  color: #6ee7b7;
+  color: #059669;
   border: 1px solid rgba(16, 185, 129, 0.35);
 }
 
 .badge-amber {
   background: rgba(245, 158, 11, 0.18);
-  color: #fde047;
+  color: #d97706;
   border: 1px solid rgba(245, 158, 11, 0.35);
 }
 
 .badge-purple {
   background: rgba(168, 85, 247, 0.18);
-  color: #d8b4fe;
+  color: #9333ea;
   border: 1px solid rgba(168, 85, 247, 0.35);
 }
 
@@ -254,22 +290,22 @@ body {
 }
 
 .spreadsheet-table th {
-  background: rgba(15, 23, 42, 0.95);
+  background: var(--bg-card);
   color: var(--text-muted);
   font-weight: 700;
   padding: 0.75rem 0.9rem;
   text-align: left;
-  border-bottom: 2px solid rgba(255, 255, 255, 0.1);
+  border-bottom: 2px solid var(--border-subtle);
   position: sticky;
   top: 0;
   z-index: 10;
 }
 
 .spreadsheet-table td {
-  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  border-bottom: 1px solid var(--border-subtle);
   padding: 0.45rem 0.6rem;
 }
 
 .spreadsheet-table tr:hover {
-  background: rgba(255, 255, 255, 0.035);
+  background: var(--bg-card-hover);
 }

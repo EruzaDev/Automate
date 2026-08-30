@@ -657,7 +657,7 @@ export default function LayoutStudio({ onStartExport, setExportStatus, onProgres
             </div>
 
             {/* Interactive Canvas Viewport */}
-            <div className="w-full bg-slate-950/90 rounded-2xl border border-slate-800 overflow-hidden shadow-inner min-h-[400px] flex items-center justify-center">
+            <div className="w-full glass-panel p-2 rounded-2xl overflow-hidden shadow-inner min-h-[400px] flex items-center justify-center">
               <InteractiveStage
                 currentLayout={currentLayout}
                 selectedFieldId={selectedFieldId}

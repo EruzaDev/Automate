@@ -52,13 +52,13 @@ export default function CSVDataEditorModal({ isOpen, onClose, rows, onSaveRows }
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-fade-in">
-      <div className="bg-slate-900 border border-slate-700 w-full max-w-5xl rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-md animate-fade-in">
+      <div className="glass-panel-accent w-full max-w-5xl rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
         {/* Modal Header */}
-        <div className="p-4 border-b border-slate-800 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 bg-slate-950">
+        <div className="p-4 border-b border-slate-700/40 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
           <div className="flex items-center gap-2">
             <Table className="w-5 h-5 text-amber-400" />
-            <h3 className="text-lg font-bold text-white">CSV / Data Table Editor</h3>
+            <h3 className="text-lg font-bold">CSV / Data Table Editor</h3>
             <span className="text-xs text-slate-400 font-mono">({tableData.length} records)</span>
           </div>
 

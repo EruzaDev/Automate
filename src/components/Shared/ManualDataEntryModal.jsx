@@ -55,13 +55,13 @@ export default function ManualDataEntryModal({ isOpen, onClose, initialRecords, 
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md p-4 animate-fade-in">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-md p-4 animate-fade-in">
       <div className="glass-panel-accent max-w-5xl w-full max-h-[85vh] flex flex-col overflow-hidden">
         {/* Modal Header */}
-        <div className="p-4 border-b border-[var(--border-color)] flex items-center justify-between">
+        <div className="p-4 border-b border-[var(--border-subtle)] flex items-center justify-between">
           <div className="flex items-center gap-2">
             <FileSpreadsheet className="w-5 h-5 text-indigo-400" />
-            <h2 className="text-lg font-bold text-white">Manual Data Grid & Column Editor</h2>
+            <h2 className="text-lg font-bold">Manual Data Grid & Column Editor</h2>
           </div>
           <button onClick={onClose} className="text-gray-400 hover:text-white">
             <X className="w-5 h-5" />

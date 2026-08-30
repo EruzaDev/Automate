@@ -314,7 +314,7 @@ export default function FrameEditor({ onStartExport, setExportStatus, onProgress
               <span className="text-xs text-slate-400 font-mono">Frame (Top Layer) → Smart Crop Photo (Bottom)</span>
             </div>
 
-            <div className="w-full overflow-auto bg-slate-950/90 p-4 rounded-2xl border border-slate-800 flex justify-center shadow-inner min-h-[300px]">
+            <div className="w-full overflow-auto glass-panel p-4 rounded-2xl flex justify-center shadow-inner min-h-[300px]">
               <canvas
                 ref={canvasRef}
                 width={canvasSize.width}

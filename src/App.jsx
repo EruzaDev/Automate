@@ -11,6 +11,20 @@ export default function App() {
   const [isWarningOpen, setIsWarningOpen] = useState(false);
   const [hasProgress, setHasProgress] = useState(false);
 
+  // Global Theme State ('dark' | 'light')
+  const [theme, setTheme] = useState(() => {
+    return localStorage.getItem('autogen_theme') || 'dark';
+  });
+
+  React.useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme);
+    localStorage.setItem('autogen_theme', theme);
+  }, [theme]);
+
+  const toggleTheme = () => {
+    setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'));
+  };
+
   // Batch Export Progress Modal State
   const [exportStatus, setExportStatus] = useState({
     isExporting: false,
@@ -71,12 +85,14 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen flex flex-col bg-[#080c14] text-slate-100 font-sans">
+    <div className="min-h-screen flex flex-col transition-colors duration-300">
       {/* Navigation Header */}
       <Navbar
         activeTab={activeTab}
         setActiveTab={handleRequestTabChange}
         onLoadPresetData={handleLoadPresetData}
+        theme={theme}
+        onToggleTheme={toggleTheme}
       />
 
       {/* Main Viewport */}
@@ -99,10 +115,14 @@ export default function App() {
       </main>
 
       {/* Footer */}
-      <footer className="border-t border-slate-800/80 py-6 text-center text-xs text-slate-500 bg-[#080c14]">
+      <footer className="border-t border-slate-800/60 py-6 text-center text-xs text-slate-500">
         <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-2">
           <span>AutomateCert Studio • Interactive Drag & Resize Batch Generator</span>
-          <span>HTML5 Canvas • XLSX Reader • JSZip Exporter • QRCode Engine</span>
+          <div className="flex items-center gap-2">
+            <span>Developed by <a href="https://github.com/EruzaDev" target="_blank" rel="noopener noreferrer" className="font-bold text-amber-400 hover:text-amber-300 hover:underline">EruzaDev</a></span>
+            <span>•</span>
+            <span>HTML5 Canvas • XLSX Reader • JSZip Exporter</span>
+          </div>
         </div>
       </footer>
 
