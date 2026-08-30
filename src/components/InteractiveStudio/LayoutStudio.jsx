@@ -135,70 +135,78 @@ export default function LayoutStudio({ onStartExport, setExportStatus, onProgres
     }
   };
 
-  // Multi-Layout Background Files Upload
-  const handleLayoutFilesUpload = (e) => {
+  // Multi-Layout Background Files Upload (Non-blocking async micro-chunking)
+  const handleLayoutFilesUpload = async (e) => {
     const files = Array.from(e.target.files || []);
     if (files.length === 0) return;
 
     setIsUploading(true);
-    let loadedCount = 0;
+    const newLayouts = [];
+    const chunkSize = 2; // Process 2 high-res template images per frame tick to keep UI fluid
 
-    files.forEach((file, i) => {
-      const reader = new FileReader();
-      reader.onload = (evt) => {
-        const dataURL = evt.target?.result;
-        const img = new Image();
-        img.onload = () => {
-          const baseName = file.name.replace(/\.[^.]+$/, '');
-          const newLayout = {
-            id: `L-${Date.now()}-${i}`,
-            name: file.name,
-            dataURL,
-            image: img,
-            selectorValue: baseName,
-            fields: [
-              {
-                id: `f-${Date.now()}-1`,
-                type: 'text',
-                isCustomMessage: false,
-                customTemplate: 'Awarded to ***{first_name} {middle_name} {last_name}*** for completing {Course}',
-                isMultiColumn: true,
-                columns: ['first_name', 'middle_name', 'last_name'],
-                separator: ' ',
-                casing: 'capitalize',
-                fontSize: 36,
-                isFixedFontSize: false,
-                letterSpacing: 0,
-                wordSpacing: 0,
-                xPct: 0.15,
-                yPct: 0.40,
-                wPct: 0.70,
-                hPct: 0.15,
-                fontFamily: 'Georgia, serif',
-                fontWeight: '700',
-                color: '#ffffff',
-                align: 'center'
-              }
-            ]
-          };
+    for (let i = 0; i < files.length; i += chunkSize) {
+      const chunk = files.slice(i, i + chunkSize);
 
-          setLayouts((prev) => {
-            const updated = [...prev, newLayout];
-            if (!currentLayoutId) setCurrentLayoutId(newLayout.id);
-            return updated;
+      await Promise.all(
+        chunk.map((file, chunkIdx) => {
+          return new Promise((resolve) => {
+            const globalIdx = i + chunkIdx;
+            // Instant 0ms object URL allocation
+            const dataURL = URL.createObjectURL(file);
+            const img = new Image();
+            img.onload = () => {
+              const baseName = file.name.replace(/\.[^.]+$/, '');
+              newLayouts.push({
+                id: `L-${Date.now()}-${globalIdx}`,
+                name: file.name,
+                dataURL,
+                image: img,
+                selectorValue: baseName,
+                fields: [
+                  {
+                    id: `f-${Date.now()}-${globalIdx}-1`,
+                    type: 'text',
+                    isCustomMessage: false,
+                    customTemplate: 'Awarded to ***{first_name} {middle_name} {last_name}*** for completing {Course}',
+                    isMultiColumn: true,
+                    columns: ['first_name', 'middle_name', 'last_name'],
+                    separator: ' ',
+                    casing: 'capitalize',
+                    fontSize: 36,
+                    isFixedFontSize: false,
+                    letterSpacing: 0,
+                    wordSpacing: 0,
+                    xPct: 0.15,
+                    yPct: 0.40,
+                    wPct: 0.70,
+                    hPct: 0.15,
+                    fontFamily: 'Georgia, serif',
+                    fontWeight: '700',
+                    color: '#ffffff',
+                    align: 'center'
+                  }
+                ]
+              });
+              resolve();
+            };
+            img.onerror = () => resolve();
+            img.src = dataURL;
           });
+        })
+      );
 
-          loadedCount++;
-          if (loadedCount === files.length) {
-            setIsUploading(false);
-          }
-        };
-        img.src = dataURL;
-      };
-      reader.readAsDataURL(file);
+      // Micro-pause yields execution to browser repaint loop (avoids any frame drop!)
+      await new Promise((resolve) => setTimeout(resolve, 16));
+    }
+
+    setLayouts((prev) => {
+      const updated = [...prev, ...newLayouts];
+      if (!currentLayoutId && newLayouts.length > 0) setCurrentLayoutId(newLayouts[0].id);
+      return updated;
     });
 
-    layoutFileInputRef.current.value = '';
+    setIsUploading(false);
+    if (layoutFileInputRef.current) layoutFileInputRef.current.value = '';
   };
 
   const handleAddField = (type) => {

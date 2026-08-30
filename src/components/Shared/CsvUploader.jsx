@@ -14,6 +14,7 @@ export default function CsvUploader({ onDataLoaded, onOpenManualEditor, currentR
     Papa.parse(file, {
       header: true,
       skipEmptyLines: true,
+      worker: true,
       complete: (results) => {
         setIsUploading(false);
         if (results.data && results.data.length > 0) {

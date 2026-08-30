@@ -109,40 +109,46 @@ export default function FrameEditor({ onStartExport, setExportStatus, onProgress
     if (frameInputRef.current) frameInputRef.current.value = '';
   };
 
-  const handleBatchDocUpload = (e) => {
+  const [uploadDocProgress, setUploadDocProgress] = useState({ current: 0, total: 0 });
+
+  const handleBatchDocUpload = async (e) => {
     const files = Array.from(e.target.files || []);
     if (files.length === 0) return;
 
     setIsUploadingDocs(true);
-    const newItems = [];
-    let readCount = 0;
+    setUploadDocProgress({ current: 0, total: files.length });
 
-    files.forEach((file, i) => {
-      const reader = new FileReader();
-      reader.onload = async (evt) => {
-        const rawSrc = evt.target?.result;
-        const thumbSrc = await createCompressedThumbnail(rawSrc, 120, 0.6);
-        const id = `doc-${Date.now()}-${i}-${Math.random().toString(36).substring(2, 6)}`;
-        newItems.push({
-          id,
-          name: file.name,
-          src: rawSrc,
-          thumbSrc,
-          ratio: 'Custom'
-        });
-        readCount++;
-        if (readCount === files.length) {
-          setDocImages((prev) => [...prev, ...newItems]);
-          setSelectedPhotoIds((prev) => new Set([...prev, ...newItems.map((item) => item.id)]));
-          setIsUploadingDocs(false);
-        }
-      };
-      reader.onerror = () => {
-        readCount++;
-        if (readCount === files.length) setIsUploadingDocs(false);
-      };
-      reader.readAsDataURL(file);
-    });
+    const newItems = [];
+    const chunkSize = 4; // Process in micro-batches of 4 photos per tick to keep UI 60fps responsive
+
+    for (let i = 0; i < files.length; i += chunkSize) {
+      const chunk = files.slice(i, i + chunkSize);
+
+      await Promise.all(
+        chunk.map(async (file, chunkIdx) => {
+          const globalIdx = i + chunkIdx;
+          // URL.createObjectURL is 0ms instant & avoids V8 Heap Base64 memory overhead
+          const rawSrc = URL.createObjectURL(file);
+          const thumbSrc = await createCompressedThumbnail(rawSrc, 120, 0.6);
+          const id = `doc-${Date.now()}-${globalIdx}-${Math.random().toString(36).substring(2, 6)}`;
+          newItems.push({
+            id,
+            name: file.name,
+            src: rawSrc,
+            thumbSrc,
+            ratio: 'Custom'
+          });
+        })
+      );
+
+      setUploadDocProgress({ current: Math.min(i + chunkSize, files.length), total: files.length });
+      // Micro-pause yields thread to browser UI repaint loop (eliminates all UI hanging/freezing!)
+      await new Promise((resolve) => setTimeout(resolve, 12));
+    }
+
+    setDocImages((prev) => [...prev, ...newItems]);
+    setSelectedPhotoIds((prev) => new Set([...prev, ...newItems.map((item) => item.id)]));
+    setIsUploadingDocs(false);
 
     if (docBatchInputRef.current) docBatchInputRef.current.value = '';
   };
@@ -485,7 +491,8 @@ export default function FrameEditor({ onStartExport, setExportStatus, onProgress
               >
                 {isUploadingDocs ? (
                   <>
-                    <Loader2 className="w-3.5 h-3.5 animate-spin text-purple-500" /> Loading...
+                    <Loader2 className="w-3.5 h-3.5 animate-spin text-purple-500" />
+                    <span>Uploading {uploadDocProgress.current}/{uploadDocProgress.total}...</span>
                   </>
                 ) : (
                   '+ Upload Batch'
