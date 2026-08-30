@@ -189,6 +189,11 @@ export default function App() {
       <BatchProgressBar
         progress={exportStatus.progress}
         total={exportStatus.total}
+        zipPercent={exportStatus.zipPercent}
+        currentFile={exportStatus.currentZipFile}
+        phase={exportStatus.phase}
+        currentVolume={exportStatus.currentVolume}
+        totalVolumes={exportStatus.totalVolumes}
         isExporting={exportStatus.isExporting}
         isFinished={exportStatus.isFinished}
         onClose={handleCloseExportModal}

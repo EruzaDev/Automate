@@ -223,10 +223,11 @@ export default function FrameEditor({ onStartExport, setExportStatus, onProgress
         if (setExportStatus) setExportStatus(curStatus);
       },
       onZipProgress: (percent, currentFile, volInfo) => {
+        const packedCount = volInfo?.volEnd || selectedDocs.length;
         const packingStatus = {
           isExporting: true,
           isFinished: false,
-          progress: selectedDocs.length,
+          progress: packedCount,
           total: selectedDocs.length,
           phase: 'packing',
           zipPercent: percent,
@@ -762,112 +763,6 @@ export default function FrameEditor({ onStartExport, setExportStatus, onProgress
                 Proceed Fast
               </button>
             </div>
-          </div>
-        </div>
-      )}
-
-      {/* Batch Generation Progress & Loading Modal */}
-      {(localExportStatus.isExporting || localExportStatus.isFinished) && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-fade-in">
-          <div className="bg-slate-900 border border-slate-700 w-full max-w-md rounded-2xl shadow-2xl overflow-hidden p-6 text-center space-y-5">
-            {localExportStatus.isExporting ? (
-              <>
-                <div className="relative w-16 h-16 mx-auto flex items-center justify-center">
-                  <div className="absolute inset-0 rounded-full border-4 border-purple-500/20 animate-ping"></div>
-                  <div className="w-16 h-16 rounded-full border-4 border-purple-400 border-t-transparent animate-spin"></div>
-                  <Download className="w-6 h-6 text-purple-400 absolute" />
-                </div>
-
-                <div className="space-y-1">
-                  {localExportStatus.totalVolumes > 1 && (
-                    <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-purple-500/20 text-purple-300 border border-purple-500/30 text-[10px] font-mono font-bold mb-1">
-                      <span>ZIP Volume {localExportStatus.currentVolume || 1} of {localExportStatus.totalVolumes}</span>
-                    </div>
-                  )}
-
-                  <h3 className="text-lg font-bold text-white">
-                    {localExportStatus.phase === 'packing' 
-                      ? (localExportStatus.totalVolumes > 1 ? `Packing Volume ${localExportStatus.currentVolume} of ${localExportStatus.totalVolumes}...` : 'Packing ZIP Archive...')
-                      : 'Generating Framed Photos'}
-                  </h3>
-                  <p className="text-xs text-slate-400 font-mono">
-                    {localExportStatus.phase === 'packing'
-                      ? `Compressing & packaging ZIP file (${localExportStatus.zipPercent || 0}%)...`
-                      : `Rendering photo ${localExportStatus.progress} of ${localExportStatus.total}...`}
-                  </p>
-
-                  {/* Live File Packing Ticker */}
-                  {localExportStatus.phase === 'packing' && localExportStatus.currentZipFile && (
-                    <div className="mt-2 p-2 rounded-xl bg-slate-950 border border-slate-800 text-[11px] font-mono text-purple-300 truncate shadow-inner">
-                      📦 Packing: {localExportStatus.currentZipFile}
-                    </div>
-                  )}
-                </div>
-
-                {/* Progress Bar & Percentage */}
-                <div className="space-y-1.5">
-                  <div className="w-full bg-slate-950 rounded-full h-3 overflow-hidden border border-slate-800 p-0.5">
-                    <div
-                      className={`h-full rounded-full transition-all duration-200 ${
-                        localExportStatus.phase === 'packing'
-                          ? 'bg-gradient-to-r from-purple-500 via-pink-500 to-indigo-500 shadow-lg shadow-purple-500/50'
-                          : 'bg-gradient-to-r from-purple-500 to-indigo-500 shadow-lg shadow-purple-500/50'
-                      }`}
-                      style={{
-                        width: `${
-                          localExportStatus.phase === 'packing'
-                            ? (localExportStatus.zipPercent || 0)
-                            : (localExportStatus.total > 0 ? Math.round((localExportStatus.progress / localExportStatus.total) * 100) : 0)
-                        }%`
-                      }}
-                    ></div>
-                  </div>
-                  <div className="flex justify-between text-[11px] font-mono text-slate-400">
-                    <span>
-                      {localExportStatus.phase === 'packing'
-                        ? `${localExportStatus.zipPercent || 0}% Packed`
-                        : `${Math.round((localExportStatus.progress / (localExportStatus.total || 1)) * 100)}% Rendered`}
-                    </span>
-                    <span>
-                      {localExportStatus.phase === 'packing'
-                        ? `Packing ZIP • ${localExportStatus.zipPercent || 0}%`
-                        : `${localExportStatus.progress} / ${localExportStatus.total}`}
-                    </span>
-                  </div>
-                </div>
-
-                <button
-                  onClick={() => {
-                    cancelExportRef.current = true;
-                  }}
-                  className="btn-secondary text-xs py-1.5 px-4 text-red-400 hover:text-red-300 border-red-500/30 font-bold"
-                >
-                  Cancel Export
-                </button>
-              </>
-            ) : (
-              <>
-                <div className="w-16 h-16 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 flex items-center justify-center mx-auto">
-                  <Download className="w-8 h-8" />
-                </div>
-                <div>
-                  <h3 className="text-xl font-bold text-white">Batch Framing Complete!</h3>
-                  <p className="text-xs text-slate-400 mt-1">
-                    Successfully processed {localExportStatus.total} assets and generated ZIP archive.
-                  </p>
-                </div>
-                <button
-                  onClick={() => {
-                    const doneStatus = { isExporting: false, isFinished: false, progress: 0, total: 0 };
-                    setLocalExportStatus(doneStatus);
-                    if (setExportStatus) setExportStatus(doneStatus);
-                  }}
-                  className="btn-primary w-full justify-center font-bold"
-                >
-                  Done
-                </button>
-              </>
-            )}
           </div>
         </div>
       )}

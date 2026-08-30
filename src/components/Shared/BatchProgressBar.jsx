@@ -2,7 +2,19 @@ import React, { useEffect } from 'react';
 import confetti from 'canvas-confetti';
 import { Loader2, CheckCircle2, Download, XCircle } from 'lucide-react';
 
-export default function BatchProgressBar({ progress, total, zipPercent = 0, currentFile = '', phase = 'rendering', isExporting, isFinished, onClose, onCancel }) {
+export default function BatchProgressBar({
+  progress,
+  total,
+  zipPercent = 0,
+  currentFile = '',
+  phase = 'rendering',
+  currentVolume = 1,
+  totalVolumes = 1,
+  isExporting,
+  isFinished,
+  onClose,
+  onCancel
+}) {
   useEffect(() => {
     if (isFinished) {
       confetti({
@@ -21,10 +33,10 @@ export default function BatchProgressBar({ progress, total, zipPercent = 0, curr
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-md p-4 animate-fade-in">
-      <div className="glass-panel-accent p-6 max-w-md w-full text-center space-y-5">
+      <div className="glass-panel-accent p-6 max-w-md w-full text-center space-y-5 shadow-2xl">
         {isFinished ? (
           <>
-            <div className="w-16 h-16 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 flex items-center justify-center mx-auto">
+            <div className="w-16 h-16 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 flex items-center justify-center mx-auto shadow-lg shadow-emerald-500/20">
               <CheckCircle2 className="w-10 h-10" />
             </div>
             <div>
@@ -44,11 +56,18 @@ export default function BatchProgressBar({ progress, total, zipPercent = 0, curr
         ) : (
           <>
             <div className="w-16 h-16 rounded-full bg-indigo-500/20 text-indigo-400 border border-indigo-500/40 flex items-center justify-center mx-auto animate-pulse">
-              <Loader2 className="w-8 h-8 animate-spin" />
+              <Loader2 className="w-8 h-8 animate-spin text-indigo-400" />
             </div>
-            <div>
+            <div className="space-y-1">
+              {totalVolumes > 1 && (
+                <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 text-[10px] font-mono font-bold mb-1">
+                  <span>ZIP Volume {currentVolume || 1} of {totalVolumes}</span>
+                </div>
+              )}
               <h3 className="text-xl font-bold text-white">
-                {isPacking ? 'Packing ZIP Archive...' : 'Generating Batch Assets...'}
+                {isPacking
+                  ? (totalVolumes > 1 ? `Packing Volume ${currentVolume} of ${totalVolumes}...` : 'Packing ZIP Archive...')
+                  : 'Generating Batch Assets...'}
               </h3>
               <p className="text-sm text-[var(--text-muted)] mt-1 font-mono">
                 {isPacking
@@ -56,7 +75,7 @@ export default function BatchProgressBar({ progress, total, zipPercent = 0, curr
                   : `Rendering item ${progress} of ${total}`}
               </p>
               {isPacking && currentFile && (
-                <div className="mt-2 p-2 rounded-lg bg-slate-900 border border-slate-800 text-[11px] font-mono text-amber-300 truncate">
+                <div className="mt-2 p-2 rounded-lg bg-slate-900 border border-slate-800 text-[11px] font-mono text-amber-300 truncate shadow-inner">
                   📦 {currentFile}
                 </div>
               )}
@@ -86,7 +105,7 @@ export default function BatchProgressBar({ progress, total, zipPercent = 0, curr
             {onCancel && (
               <button
                 onClick={onCancel}
-                className="w-full py-2.5 px-4 rounded-xl bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/30 text-xs font-bold transition-all flex items-center justify-center gap-2 mt-2"
+                className="w-full py-2.5 px-4 rounded-xl bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/30 text-xs font-bold transition-all flex items-center justify-center gap-2 mt-2 cursor-pointer"
               >
                 <XCircle className="w-4 h-4" /> Cancel Generation
               </button>

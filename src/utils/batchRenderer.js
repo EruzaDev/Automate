@@ -256,7 +256,7 @@ export async function exportLayoutsToZip({
       }
 
       if (onProgress) {
-        onProgress(i + 1, total, { currentVolume: vol + 1, totalVolumes });
+        onProgress(i + 1, total, { currentVolume: vol + 1, totalVolumes, volProgress: i + 1, volEnd });
       }
 
       // Adaptive yielding: Longer pauses every 5 records in safe memory mode or large batch
@@ -271,42 +271,64 @@ export async function exportLayoutsToZip({
     if (shouldCancel && shouldCancel()) {
       exportCanvas.width = 0;
       exportCanvas.height = 0;
-      return;
+      return false;
     }
 
     // Generate Volume ZIP
-    const zipContent = await volumeZip.generateAsync(
-      {
-        type: 'blob',
-        compression: 'STORE',
-        streamFiles: true
-      },
-      (metadata) => {
-        if (onZipProgress) {
-          onZipProgress(Math.round(metadata.percent), metadata.currentFile || '', { currentVolume: vol + 1, totalVolumes });
+    try {
+      const zipContent = await volumeZip.generateAsync(
+        {
+          type: 'blob',
+          compression: 'STORE',
+          streamFiles: true
+        },
+        (metadata) => {
+          if (shouldCancel && shouldCancel()) {
+            throw new Error('EXPORT_CANCELLED');
+          }
+          if (onZipProgress) {
+            onZipProgress(Math.round(metadata.percent), metadata.currentFile || '', {
+              currentVolume: vol + 1,
+              totalVolumes,
+              volEnd
+            });
+          }
         }
+      );
+
+      if (shouldCancel && shouldCancel()) {
+        exportCanvas.width = 0;
+        exportCanvas.height = 0;
+        return false;
       }
-    );
 
-    // Auto Download Volume ZIP File
-    const zipFileName = totalVolumes > 1
-      ? `Certificates_Part_${vol + 1}_of_${totalVolumes}_(${volStart + 1}-${volEnd}).zip`
-      : 'Certificates_Batch_Export.zip';
+      // Auto Download Volume ZIP File
+      const zipFileName = totalVolumes > 1
+        ? `Certificates_Part_${vol + 1}_of_${totalVolumes}_(${volStart + 1}-${volEnd}).zip`
+        : 'Certificates_Batch_Export.zip';
 
-    const blobUrl = URL.createObjectURL(zipContent);
-    const link = document.createElement('a');
-    link.href = blobUrl;
-    link.download = zipFileName;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+      const blobUrl = URL.createObjectURL(zipContent);
+      const link = document.createElement('a');
+      link.href = blobUrl;
+      link.download = zipFileName;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
 
-    // Revoke URL object & pause 150ms for Garbage Collection sweep before next volume
-    setTimeout(() => {
-      URL.revokeObjectURL(blobUrl);
-    }, 1000);
+      // Revoke URL object & pause 150ms for Garbage Collection sweep before next volume
+      setTimeout(() => {
+        URL.revokeObjectURL(blobUrl);
+      }, 1000);
 
-    await new Promise((resolve) => setTimeout(resolve, 150));
+      await new Promise((resolve) => setTimeout(resolve, 150));
+    } catch (err) {
+      exportCanvas.width = 0;
+      exportCanvas.height = 0;
+      if (err.message === 'EXPORT_CANCELLED') {
+        return false;
+      }
+      throw err;
+    }
   }
 
   exportCanvas.width = 0;
