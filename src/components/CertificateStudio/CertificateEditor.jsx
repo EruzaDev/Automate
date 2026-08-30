@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Award, Plus, Trash2, Move, Type, Download, Sliders, Layers, FolderTree, FileSpreadsheet, Sparkles, ZoomIn, ZoomOut, Maximize2, ArrowUp, ArrowDown, Eye, Check } from 'lucide-react';
+import { Award, Plus, Trash2, Move, Type, Download, Sliders, Layers, FolderTree, FileSpreadsheet, Sparkles, ZoomIn, ZoomOut, Maximize2, ArrowUp, ArrowDown, Eye, Check, CheckSquare, Square } from 'lucide-react';
 import CsvUploader from '../Shared/CsvUploader';
 import ManualDataEntryModal from '../Shared/ManualDataEntryModal';
 import { createSampleCertificateBackground, SAMPLE_CSV_DATA } from '../Shared/SampleDataPresets';
@@ -7,8 +7,9 @@ import { renderCanvasElement, loadImage, evaluateMultiColumnText } from '../../u
 import { exportBatchToZip } from '../../utils/zipExporter';
 
 export default function CertificateEditor({ onStartExport, setExportStatus }) {
-  // Data State
+  // Data State & Selection
   const [records, setRecords] = useState(SAMPLE_CSV_DATA);
+  const [selectedRecordIndices, setSelectedRecordIndices] = useState(new Set(SAMPLE_CSV_DATA.map((_, i) => i)));
   const [columns, setColumns] = useState(['first_name', 'middle_name', 'last_name', 'section', 'year', 'department', 'role']);
   const [currentRecordIdx, setCurrentRecordIdx] = useState(0);
 
@@ -17,6 +18,23 @@ export default function CertificateEditor({ onStartExport, setExportStatus }) {
   const [bgImageObj, setBgImageObj] = useState(null);
   const [canvasDimensions, setCanvasDimensions] = useState({ width: 1200, height: 850 });
   const [zoomScale, setZoomScale] = useState(1.0);
+
+  const handleSelectAllRecords = () => {
+    setSelectedRecordIndices(new Set(records.map((_, i) => i)));
+  };
+
+  const handleDeselectAllRecords = () => {
+    setSelectedRecordIndices(new Set());
+  };
+
+  const handleToggleRecordSelection = (idx) => {
+    setSelectedRecordIndices((prev) => {
+      const next = new Set(prev);
+      if (next.has(idx)) next.delete(idx);
+      else next.add(idx);
+      return next;
+    });
+  };
 
   // Text Layers Configuration
   const [textLayers, setTextLayers] = useState([
@@ -160,20 +178,22 @@ export default function CertificateEditor({ onStartExport, setExportStatus }) {
 
   const cancelExportRef = useRef(false);
 
-  // Batch Export Trigger
+  // Batch Export Trigger for Selected Records
   const handleBatchExport = async () => {
-    if (records.length === 0) {
-      alert('Please load record data first!');
+    const selectedRecords = records.filter((_, idx) => selectedRecordIndices.has(idx));
+
+    if (selectedRecords.length === 0) {
+      alert('Please select at least 1 record to export!');
       return;
     }
 
     cancelExportRef.current = false;
 
     onStartExport();
-    setExportStatus({ isExporting: true, isFinished: false, progress: 0, total: records.length });
+    setExportStatus({ isExporting: true, isFinished: false, progress: 0, total: selectedRecords.length });
 
     await exportBatchToZip({
-      records,
+      records: selectedRecords,
       layerConfig: {
         backgroundImage: bgImageObj,
         textLayers
@@ -203,22 +223,28 @@ export default function CertificateEditor({ onStartExport, setExportStatus }) {
   return (
     <div className="space-y-6 animate-fade-in">
       {/* Top Banner */}
-      <div className="glass-panel p-6 flex flex-col md:flex-row items-start md:items-center justify-between gap-4 border-amber-500/20 bg-gradient-to-r from-amber-950/20 via-slate-900 to-indigo-950/20">
+      <div className="glass-panel p-6 flex flex-col md:flex-row items-start md:items-center justify-between gap-4 border-amber-500/20">
         <div>
           <div className="flex items-center gap-2.5">
-            <div className="w-9 h-9 rounded-xl bg-amber-500/20 text-amber-400 flex items-center justify-center border border-amber-500/30">
+            <div className="w-9 h-9 rounded-xl bg-amber-500/20 text-amber-500 flex items-center justify-center border border-amber-500/30">
               <Award className="w-5 h-5" />
             </div>
-            <h2 className="text-xl font-extrabold text-white tracking-tight">Automated Certificate Generator</h2>
+            <h2 className="text-xl font-extrabold text-main tracking-tight">Automated Certificate Generator</h2>
           </div>
-          <p className="text-xs text-slate-300 mt-1">
-            Build multi-column text boxes (e.g. combine <code className="text-amber-300 font-semibold">first_name + middle_name + last_name + section + year</code>), reorder sequence, and group exports into subfolders.
+          <p className="text-xs text-slate-400 mt-1">
+            Build multi-column text boxes (e.g. combine <code className="text-amber-500 font-semibold">first_name + middle_name + last_name + section + year</code>), reorder sequence, and group exports into subfolders.
           </p>
         </div>
 
-        <button onClick={handleBatchExport} className="btn-gold shadow-lg shadow-amber-500/20">
+        <button
+          onClick={handleBatchExport}
+          disabled={selectedRecordIndices.size === 0}
+          className="btn-gold shadow-lg shadow-amber-500/20 disabled:opacity-40"
+        >
           <Download className="w-4 h-4" />
-          Batch Export ZIP ({records.length} Certificates)
+          {selectedRecordIndices.size === 0
+            ? 'No Records Selected'
+            : `Batch Export Selected (${selectedRecordIndices.size} ZIP)`}
         </button>
       </div>
 
@@ -229,6 +255,7 @@ export default function CertificateEditor({ onStartExport, setExportStatus }) {
           <CsvUploader
             onDataLoaded={(parsedRecords, parsedHeaders) => {
               setRecords(parsedRecords);
+              setSelectedRecordIndices(new Set(parsedRecords.map((_, i) => i)));
               setColumns(parsedHeaders);
               setCurrentRecordIdx(0);
             }}
@@ -236,24 +263,44 @@ export default function CertificateEditor({ onStartExport, setExportStatus }) {
             currentRecordCount={records.length}
           />
 
-          {/* Record Selector / Live Switcher */}
+          {/* Record Selector & Select All Toolbar */}
           {records.length > 0 && (
-            <div className="glass-panel p-4 flex items-center justify-between gap-3 bg-slate-900/60">
-              <div className="flex items-center gap-2 text-xs font-semibold text-slate-300">
-                <Eye className="w-4 h-4 text-indigo-400" />
-                <span>Preview Record:</span>
+            <div className="glass-panel p-4 space-y-3">
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2 text-xs font-semibold text-main">
+                  <Eye className="w-4 h-4 text-indigo-500" />
+                  <span>Preview Record:</span>
+                </div>
+                <select
+                  value={currentRecordIdx}
+                  onChange={(e) => setCurrentRecordIdx(Number(e.target.value))}
+                  className="select-dark text-xs font-medium max-w-[200px]"
+                >
+                  {records.map((r, i) => (
+                    <option key={i} value={i}>
+                      #{i + 1}: {r.first_name || ''} {r.last_name || 'Record'} ({r.section || 'No Sec'})
+                    </option>
+                  ))}
+                </select>
               </div>
-              <select
-                value={currentRecordIdx}
-                onChange={(e) => setCurrentRecordIdx(Number(e.target.value))}
-                className="select-dark text-xs font-medium"
-              >
-                {records.map((r, i) => (
-                  <option key={i} value={i}>
-                    #{i + 1}: {r.first_name || ''} {r.last_name || 'Record'} ({r.section || 'No Sec'})
-                  </option>
-                ))}
-              </select>
+
+              <div className="flex items-center justify-between gap-1 pt-2 border-t border-slate-700/20 text-xs">
+                <button
+                  onClick={handleSelectAllRecords}
+                  className="text-[11px] font-bold text-amber-500 hover:underline flex items-center gap-1"
+                >
+                  <CheckSquare className="w-3.5 h-3.5" /> Select All ({records.length})
+                </button>
+                <button
+                  onClick={handleDeselectAllRecords}
+                  className="text-[11px] font-bold text-slate-400 hover:underline flex items-center gap-1"
+                >
+                  <Square className="w-3.5 h-3.5" /> Deselect All
+                </button>
+                <span className="badge badge-indigo text-[10px] ml-auto">
+                  {selectedRecordIndices.size} Selected
+                </span>
+              </div>
             </div>
           )}
 
@@ -261,8 +308,8 @@ export default function CertificateEditor({ onStartExport, setExportStatus }) {
           <div className="glass-panel p-5 space-y-4">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
-                <Layers className="w-4 h-4 text-indigo-400" />
-                <h3 className="font-bold text-sm text-white">Step 2: Multi-Column Text Layers</h3>
+                <Layers className="w-4 h-4 text-indigo-500" />
+                <h3 className="font-bold text-sm text-main">Step 2: Multi-Column Text Layers</h3>
               </div>
               <button onClick={handleAddTextLayer} className="btn-secondary text-xs py-1 px-2.5">
                 <Plus className="w-3.5 h-3.5" /> Add Layer
@@ -277,8 +324,8 @@ export default function CertificateEditor({ onStartExport, setExportStatus }) {
                   onClick={() => setSelectedLayerId(layer.id)}
                   className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
                     selectedLayerId === layer.id
-                      ? 'bg-gradient-to-r from-indigo-600 to-purple-600 text-white shadow-md'
-                      : 'bg-slate-900 text-slate-400 hover:text-white border border-slate-800'
+                      ? 'bg-indigo-600 text-white shadow-md'
+                      : 'btn-secondary text-slate-400 hover:text-main'
                   }`}
                 >
                   <Type className="w-3.5 h-3.5" />
@@ -288,23 +335,23 @@ export default function CertificateEditor({ onStartExport, setExportStatus }) {
             </div>
 
             {selectedLayer && (
-              <div className="space-y-4 pt-3 border-t border-slate-800">
+              <div className="space-y-4 pt-3 border-t border-slate-700/30">
                 {/* Live Formatted Output Preview Pill */}
-                <div className="p-3 rounded-xl bg-indigo-950/50 border border-indigo-500/30 space-y-1">
-                  <span className="text-[10px] font-bold text-indigo-400 uppercase tracking-wider block">
+                <div className="p-3 rounded-xl bg-indigo-500/10 border border-indigo-500/30 space-y-1">
+                  <span className="text-[10px] font-bold text-indigo-500 uppercase tracking-wider block">
                     Live Formatted String Preview:
                   </span>
-                  <div className="text-sm font-semibold text-amber-300 truncate font-mono">
+                  <div className="text-sm font-semibold text-amber-500 truncate font-mono">
                     "{liveEvaluatedText || 'No columns selected'}"
                   </div>
                 </div>
 
                 {/* Columns Selection Checkboxes */}
                 <div>
-                  <label className="text-xs font-bold text-indigo-300 block mb-1.5">
+                  <label className="text-xs font-bold text-indigo-500 block mb-1.5">
                     Select CSV Columns for this Text Box:
                   </label>
-                  <div className="flex flex-wrap gap-1.5 p-2 bg-slate-950/80 rounded-xl border border-slate-800 max-h-32 overflow-auto">
+                  <div className="flex flex-wrap gap-1.5 p-2 glass-panel rounded-xl max-h-32 overflow-auto">
                     {columns.map((col) => {
                       const isSelected = (selectedLayer.columns || []).includes(col);
                       return (
@@ -322,8 +369,8 @@ export default function CertificateEditor({ onStartExport, setExportStatus }) {
                           }}
                           className={`text-xs px-2.5 py-1 rounded-lg font-semibold border transition-all ${
                             isSelected
-                              ? 'bg-indigo-600/30 border-indigo-500 text-indigo-200 shadow-sm'
-                              : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
+                              ? 'bg-indigo-600/30 border-indigo-500 text-indigo-500 shadow-sm'
+                              : 'btn-secondary text-slate-400 hover:text-main'
                           }`}
                         >
                           {isSelected ? `✓ ${col}` : `+ ${col}`}
@@ -335,23 +382,23 @@ export default function CertificateEditor({ onStartExport, setExportStatus }) {
 
                 {/* Column Reordering Controls */}
                 <div>
-                  <label className="text-xs font-bold text-amber-300 block mb-1.5">
+                  <label className="text-xs font-bold text-amber-500 block mb-1.5">
                     Column Display Sequence & Order:
                   </label>
-                  <div className="space-y-1.5 bg-slate-950/90 p-2.5 rounded-xl border border-slate-800">
+                  <div className="space-y-1.5 glass-panel p-2.5 rounded-xl">
                     {(selectedLayer.order || selectedLayer.columns).map((colName, idx) => (
                       <div
                         key={colName}
-                        className="flex items-center justify-between bg-slate-900/90 px-3 py-1.5 rounded-lg border border-slate-800 text-xs font-medium"
+                        className="flex items-center justify-between glass-panel px-3 py-1.5 rounded-lg text-xs font-medium"
                       >
-                        <span className="text-slate-200">
-                          <strong className="text-indigo-400">{idx + 1}.</strong> {colName}
+                        <span className="text-main">
+                          <strong className="text-indigo-500">{idx + 1}.</strong> {colName}
                         </span>
                         <div className="flex items-center gap-1">
                           <button
                             onClick={() => moveColumnInOrder(colName, 'up')}
                             disabled={idx === 0}
-                            className="p-1 rounded bg-slate-800 text-slate-300 hover:bg-indigo-600 disabled:opacity-30 text-[10px]"
+                            className="p-1 rounded bg-slate-500/20 text-main hover:bg-indigo-600 hover:text-white disabled:opacity-30 text-[10px]"
                             title="Move Up"
                           >
                             <ArrowUp className="w-3 h-3" />
@@ -359,7 +406,7 @@ export default function CertificateEditor({ onStartExport, setExportStatus }) {
                           <button
                             onClick={() => moveColumnInOrder(colName, 'down')}
                             disabled={idx === (selectedLayer.order || selectedLayer.columns).length - 1}
-                            className="p-1 rounded bg-slate-800 text-slate-300 hover:bg-indigo-600 disabled:opacity-30 text-[10px]"
+                            className="p-1 rounded bg-slate-500/20 text-main hover:bg-indigo-600 hover:text-white disabled:opacity-30 text-[10px]"
                             title="Move Down"
                           >
                             <ArrowDown className="w-3 h-3" />
@@ -443,7 +490,7 @@ export default function CertificateEditor({ onStartExport, setExportStatus }) {
                       type="color"
                       value={selectedLayer.color || '#ffffff'}
                       onChange={(e) => updateSelectedLayer({ color: e.target.value })}
-                      className="h-9 w-full rounded-lg bg-slate-900 border border-slate-800 cursor-pointer p-0.5"
+                      className="h-9 w-full rounded-lg border border-slate-700 cursor-pointer p-0.5"
                     />
                   </div>
 
@@ -462,12 +509,12 @@ export default function CertificateEditor({ onStartExport, setExportStatus }) {
                 </div>
 
                 {/* Position Sliders with Snap Button */}
-                <div className="space-y-3 pt-2 border-t border-slate-800">
+                <div className="space-y-3 pt-2 border-t border-slate-700/30">
                   <div className="flex items-center justify-between text-xs font-semibold">
-                    <span className="text-slate-300">Vertical Position (Y): {selectedLayer.y}px</span>
+                    <span className="text-slate-400">Vertical Position (Y): {selectedLayer.y}px</span>
                     <button
                       onClick={centerLayerHorizontally}
-                      className="text-[10px] text-indigo-400 hover:text-indigo-300 underline"
+                      className="text-[10px] text-indigo-500 hover:underline"
                     >
                       Snap Center (X)
                     </button>
@@ -497,12 +544,12 @@ export default function CertificateEditor({ onStartExport, setExportStatus }) {
           {/* Step 3: Subfolder Grouping Settings (Section & Year) */}
           <div className="glass-panel p-5 space-y-3">
             <div className="flex items-center gap-2">
-              <FolderTree className="w-4 h-4 text-amber-400" />
-              <h3 className="font-bold text-sm text-white">Step 3: Subfolder Grouping & File Naming</h3>
+              <FolderTree className="w-4 h-4 text-amber-500" />
+              <h3 className="font-bold text-sm text-main">Step 3: Subfolder Grouping & File Naming</h3>
             </div>
 
             <div>
-              <label className="text-xs font-semibold text-slate-300 block mb-1">
+              <label className="text-xs font-semibold text-slate-400 block mb-1">
                 File Naming Format:
               </label>
               <input
@@ -514,7 +561,7 @@ export default function CertificateEditor({ onStartExport, setExportStatus }) {
             </div>
 
             <div>
-              <label className="text-xs font-semibold text-slate-300 block mb-1">
+              <label className="text-xs font-semibold text-slate-400 block mb-1">
                 Subfolder Grouping Columns:
               </label>
               <div className="flex flex-wrap gap-1.5">
@@ -530,8 +577,8 @@ export default function CertificateEditor({ onStartExport, setExportStatus }) {
                       }}
                       className={`text-xs px-2.5 py-1 rounded-lg font-semibold border transition-all ${
                         isGrouped
-                          ? 'bg-amber-500/20 border-amber-500/50 text-amber-300 shadow-sm'
-                          : 'bg-slate-900 border-slate-800 text-slate-400'
+                          ? 'bg-amber-500/20 border-amber-500/50 text-amber-500 shadow-sm'
+                          : 'btn-secondary text-slate-400'
                       }`}
                     >
                       {isGrouped ? `✓ Subfolder: ${col}` : `+ ${col}`}
@@ -547,7 +594,7 @@ export default function CertificateEditor({ onStartExport, setExportStatus }) {
         <div className="lg:col-span-7 space-y-4">
           <div className="glass-panel p-5 space-y-4 sticky top-20">
             <div className="flex flex-wrap items-center justify-between gap-3">
-              <h3 className="font-bold text-base text-white">Live Certificate Preview</h3>
+              <h3 className="font-bold text-base text-main">Live Certificate Preview</h3>
 
               <div className="flex items-center gap-2">
                 <input
@@ -567,18 +614,18 @@ export default function CertificateEditor({ onStartExport, setExportStatus }) {
             </div>
 
             {/* Viewport */}
-            <div className="w-full overflow-auto bg-slate-950/90 p-4 rounded-2xl border border-slate-800 flex justify-center shadow-inner">
+            <div className="w-full overflow-auto glass-panel p-4 rounded-2xl flex justify-center shadow-inner">
               <canvas
                 ref={canvasRef}
                 width={canvasDimensions.width}
                 height={canvasDimensions.height}
-                className="max-w-full h-auto rounded-lg shadow-2xl border border-slate-800/80"
+                className="max-w-full h-auto rounded-lg shadow-2xl border border-slate-700/40"
               />
             </div>
 
             <div className="flex justify-between text-xs text-slate-400 px-1 font-medium">
               <span>Canvas dimensions: {canvasDimensions.width} x {canvasDimensions.height} px</span>
-              <span className="text-indigo-400">High-DPI Export Ready</span>
+              <span className="text-indigo-500">High-DPI Export Ready</span>
             </div>
           </div>
         </div>
@@ -592,6 +639,7 @@ export default function CertificateEditor({ onStartExport, setExportStatus }) {
         initialColumns={columns}
         onSave={(updatedRecords, updatedCols) => {
           setRecords(updatedRecords);
+          setSelectedRecordIndices(new Set(updatedRecords.map((_, i) => i)));
           setColumns(updatedCols);
           setCurrentRecordIdx(0);
         }}

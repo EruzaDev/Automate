@@ -1,5 +1,5 @@
 import React, { useState, useRef } from 'react';
-import { Layout, Plus, Trash2, FileSpreadsheet, Download, Type, QrCode, Sliders, ArrowUp, ArrowDown, FolderPlus, Bold, Italic, Strikethrough, Underline, MessageSquare, Search, Table, Eye, CheckCircle, Loader2 } from 'lucide-react';
+import { Layout, Plus, Trash2, FileSpreadsheet, Download, Type, QrCode, Sliders, ArrowUp, ArrowDown, FolderPlus, Bold, Italic, Strikethrough, Underline, MessageSquare, Search, Table, Eye, CheckCircle, Loader2, CheckSquare, Square } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import InteractiveStage from './InteractiveStage';
 import CSVDataEditorModal from '../Shared/CSVDataEditorModal';
@@ -28,9 +28,27 @@ export default function LayoutStudio({ onStartExport, setExportStatus, onProgres
   const fontFileInputRef = useRef(null);
   const templateTextareaRef = useRef(null);
 
-  // Batch CSV Data Rows (Clean start, populated when user uploads CSV/Excel file)
+  // Batch CSV Data Rows & Selection State
   const [rows, setRows] = useState([]);
+  const [selectedRowIndices, setSelectedRowIndices] = useState(new Set());
   const [dataFileName, setDataFileName] = useState('');
+
+  const handleSelectAllRows = () => {
+    setSelectedRowIndices(new Set(rows.map((_, i) => i)));
+  };
+
+  const handleDeselectAllRows = () => {
+    setSelectedRowIndices(new Set());
+  };
+
+  const handleToggleRowSelection = (index) => {
+    setSelectedRowIndices((prev) => {
+      const next = new Set(prev);
+      if (next.has(index)) next.delete(index);
+      else next.add(index);
+      return next;
+    });
+  };
 
   // CSV Data Editor Modal & Live Search / Preview Row State
   const [isDataEditorOpen, setIsDataEditorOpen] = useState(false);
@@ -70,24 +88,34 @@ export default function LayoutStudio({ onStartExport, setExportStatus, onProgres
 
   const activePreviewRow = rows[previewRowIndex] || rows[0] || {};
 
+  // Uploading Loading State
+  const [isUploading, setIsUploading] = useState(false);
+
   // Font Upload Handler
   const handleCustomFontUpload = async (e) => {
     const files = Array.from(e.target.files || []);
-    for (const file of files) {
-      try {
+    if (files.length === 0) return;
+    setIsUploading(true);
+    try {
+      for (const file of files) {
         await loadCustomFontFile(file);
-        setCustomFonts(getLoadedCustomFonts());
-      } catch (err) {
-        alert(err.message);
       }
+      setCustomFonts(getLoadedCustomFonts());
+    } catch (err) {
+      alert(err.message);
+    } finally {
+      setIsUploading(false);
+      fontFileInputRef.current.value = '';
     }
-    fontFileInputRef.current.value = '';
   };
 
   // Multi-Layout Background Files Upload
   const handleLayoutFilesUpload = (e) => {
     const files = Array.from(e.target.files || []);
     if (files.length === 0) return;
+
+    setIsUploading(true);
+    let loadedCount = 0;
 
     files.forEach((file, i) => {
       const reader = new FileReader();
@@ -133,6 +161,11 @@ export default function LayoutStudio({ onStartExport, setExportStatus, onProgres
             if (!currentLayoutId) setCurrentLayoutId(newLayout.id);
             return updated;
           });
+
+          loadedCount++;
+          if (loadedCount === files.length) {
+            setIsUploading(false);
+          }
         };
         img.src = dataURL;
       };
@@ -308,6 +341,7 @@ export default function LayoutStudio({ onStartExport, setExportStatus, onProgres
     const file = e.target.files?.[0];
     if (!file) return;
 
+    setIsUploading(true);
     const isCSV = /\.csv$/i.test(file.name);
     const reader = new FileReader();
 
@@ -328,6 +362,7 @@ export default function LayoutStudio({ onStartExport, setExportStatus, onProgres
           });
         }
         setRows(parsed);
+        setSelectedRowIndices(new Set(parsed.map((_, i) => i)));
         setPreviewRowIndex(0);
         setDataFileName(`${file.name} (${parsed.length} rows)`);
 
@@ -355,6 +390,8 @@ export default function LayoutStudio({ onStartExport, setExportStatus, onProgres
         }
       } catch (err) {
         alert('File parsing error: ' + err.message);
+      } finally {
+        setIsUploading(false);
       }
     };
 
@@ -393,19 +430,25 @@ export default function LayoutStudio({ onStartExport, setExportStatus, onProgres
 
   const cancelExportRef = useRef(false);
 
-  // Export Batch ZIP
+  // Export Batch ZIP for Selected Rows
   const handleGenerateBatchZip = async () => {
     if (layouts.length === 0 || rows.length === 0) return;
+
+    const selectedRowsToExport = rows.filter((_, idx) => selectedRowIndices.has(idx));
+    if (selectedRowsToExport.length === 0) {
+      alert('Please select at least 1 record to generate!');
+      return;
+    }
 
     cancelExportRef.current = false;
 
     if (onStartExport) onStartExport();
-    const initialStatus = { isExporting: true, isFinished: false, progress: 0, total: rows.length };
+    const initialStatus = { isExporting: true, isFinished: false, progress: 0, total: selectedRowsToExport.length };
     setLocalExportStatus(initialStatus);
     if (setExportStatus) setExportStatus(initialStatus);
 
     const zipBlob = await exportLayoutsToZip({
-      rows,
+      rows: selectedRowsToExport,
       layouts,
       layoutColumnKey,
       onProgress: (current, total) => {
@@ -436,7 +479,7 @@ export default function LayoutStudio({ onStartExport, setExportStatus, onProgres
       URL.revokeObjectURL(blobUrl);
     }, 1000);
 
-    const finalStatus = { isExporting: false, isFinished: true, progress: rows.length, total: rows.length };
+    const finalStatus = { isExporting: false, isFinished: true, progress: selectedRowsToExport.length, total: selectedRowsToExport.length };
     setLocalExportStatus(finalStatus);
     if (setExportStatus) setExportStatus(finalStatus);
   };
@@ -450,26 +493,31 @@ export default function LayoutStudio({ onStartExport, setExportStatus, onProgres
         rows={rows}
         onSaveRows={(updatedRows) => {
           setRows(updatedRows);
+          setSelectedRowIndices(new Set(updatedRows.map((_, i) => i)));
           if (previewRowIndex >= updatedRows.length) setPreviewRowIndex(0);
         }}
+        selectedRowIndices={selectedRowIndices}
+        onToggleSelectRow={handleToggleRowSelection}
+        onSelectAll={handleSelectAllRows}
+        onDeselectAll={handleDeselectAllRows}
       />
 
       {/* Clean Header */}
-      <div className="glass-panel p-4 flex items-center justify-between border-amber-500/30 bg-gradient-to-r from-amber-950/20 via-slate-900 to-indigo-950/20">
+      <div className="glass-panel p-4 flex items-center justify-between border-amber-500/30">
         <div className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-xl bg-amber-500/20 text-amber-400 flex items-center justify-center border border-amber-500/30">
+          <div className="w-9 h-9 rounded-xl bg-amber-500/20 text-amber-500 flex items-center justify-center border border-amber-500/40">
             <Layout className="w-5 h-5" />
           </div>
-          <h2 className="text-2xl font-black text-white tracking-tight">Certificate</h2>
+          <h2 className="text-2xl font-black tracking-tight">Certificate</h2>
         </div>
 
         {/* Edit CSV Button in Header - Only available when dataset is uploaded */}
         {rows.length > 0 && (
           <button
             onClick={() => setIsDataEditorOpen(true)}
-            className="btn-secondary text-xs py-1.5 px-3 border-indigo-500/40 text-indigo-300 flex items-center gap-1.5"
+            className="btn-secondary text-xs py-1.5 px-3 flex items-center gap-1.5"
           >
-            <Table className="w-4 h-4 text-indigo-400" /> View & Edit CSV Data ({rows.length})
+            <Table className="w-4 h-4 text-indigo-500" /> View & Edit CSV Data ({rows.length})
           </button>
         )}
       </div>
@@ -479,9 +527,9 @@ export default function LayoutStudio({ onStartExport, setExportStatus, onProgres
         <div className="lg:col-span-3 md:col-span-4 space-y-4">
           {/* Custom Font Upload */}
           <div className="glass-panel p-4 space-y-3">
-            <h3 className="font-bold text-xs text-slate-300 uppercase tracking-wider flex items-center justify-between">
+            <h3 className="font-bold text-xs uppercase tracking-wider flex items-center justify-between opacity-80">
               <span>Custom Fonts</span>
-              <span className="text-[10px] text-amber-400 font-mono">{customFonts.length} uploaded</span>
+              <span className="text-[10px] text-amber-500 font-mono">{customFonts.length} uploaded</span>
             </h3>
 
             <input
@@ -495,9 +543,9 @@ export default function LayoutStudio({ onStartExport, setExportStatus, onProgres
 
             <button
               onClick={() => fontFileInputRef.current?.click()}
-              className="btn-secondary text-xs w-full justify-center border-indigo-500/40 text-indigo-300"
+              className="btn-secondary text-xs w-full justify-center"
             >
-              <FolderPlus className="w-4 h-4 text-indigo-400" /> Upload Font (.ttf, .otf, .woff)
+              <FolderPlus className="w-4 h-4 text-indigo-500" /> Upload Font (.ttf, .otf, .woff)
             </button>
           </div>
 
@@ -532,16 +580,16 @@ export default function LayoutStudio({ onStartExport, setExportStatus, onProgres
                   }}
                   className={`p-2.5 rounded-xl border flex flex-col gap-2 cursor-pointer transition-all ${
                     currentLayoutId === l.id
-                      ? 'bg-amber-500/15 border-amber-500 text-white shadow-md'
-                      : 'bg-slate-900 border-slate-800 text-slate-400 hover:bg-slate-800'
+                      ? 'bg-amber-500/15 border-amber-500 text-amber-500 font-bold shadow-md'
+                      : 'glass-panel text-slate-500 hover:border-amber-500/40'
                   }`}
                 >
                   <div className="flex items-center justify-between gap-2">
                     <div className="flex items-center gap-2 overflow-hidden">
-                      <img src={l.dataURL} alt="thumb" className="w-8 h-8 rounded object-cover border border-slate-700" />
+                      <img src={l.dataURL} alt="thumb" className="w-8 h-8 rounded object-cover border border-slate-500/30" />
                       <div className="min-w-0">
                         <span className="text-xs font-bold block truncate">{l.name}</span>
-                        <span className="text-[10px] text-slate-400">{l.fields.length} field(s)</span>
+                        <span className="text-[10px] opacity-70">{l.fields.length} field(s)</span>
                       </div>
                     </div>
                     <button
@@ -563,19 +611,19 @@ export default function LayoutStudio({ onStartExport, setExportStatus, onProgres
 
           {/* Add Text Button */}
           <div className="glass-panel p-4 space-y-3">
-            <h3 className="font-bold text-xs text-slate-300 uppercase tracking-wider">Add Text</h3>
+            <h3 className="font-bold text-xs uppercase tracking-wider opacity-80">Add Text</h3>
             <button
               onClick={() => handleAddField('text')}
               disabled={!currentLayout}
-              className="btn-secondary text-xs w-full justify-center border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/10 disabled:opacity-40 font-bold"
+              className="btn-secondary text-xs w-full justify-center disabled:opacity-40 font-bold text-emerald-600 dark:text-emerald-400"
             >
-              <Type className="w-4 h-4 text-emerald-400" /> + Add Text
+              <Type className="w-4 h-4 text-emerald-500" /> + Add Text
             </button>
           </div>
 
           {/* Current Layout Fields List */}
           <div className="glass-panel p-4 space-y-3">
-            <h3 className="font-bold text-xs text-slate-300 uppercase tracking-wider">
+            <h3 className="font-bold text-xs uppercase tracking-wider opacity-80">
               Layout Fields ({currentLayout?.fields.length || 0})
             </h3>
 
@@ -586,15 +634,15 @@ export default function LayoutStudio({ onStartExport, setExportStatus, onProgres
                   onClick={() => setSelectedFieldId(f.id)}
                   className={`p-2 rounded-xl border flex items-center justify-between cursor-pointer text-xs transition-all ${
                     selectedFieldId === f.id
-                      ? 'bg-amber-500/20 border-amber-400 text-white font-bold'
-                      : 'bg-slate-900 border-slate-800 text-slate-300 hover:bg-slate-800'
+                      ? 'bg-amber-500/20 border-amber-400 font-bold'
+                      : 'glass-panel opacity-80 hover:opacity-100'
                   }`}
                 >
                   <div className="flex items-center gap-2 truncate">
-                    <span className="text-[10px] font-bold px-1.5 py-0.5 rounded font-mono bg-emerald-500/30 text-emerald-300">
+                    <span className="text-[10px] font-bold px-1.5 py-0.5 rounded font-mono bg-emerald-500/20 text-emerald-600 dark:text-emerald-300">
                       TXT
                     </span>
-                    <span className="font-mono text-slate-200 truncate">
+                    <span className="font-mono truncate">
                       {f.isCustomMessage ? 'Custom Message' : f.isMultiColumn ? f.columns?.join(' + ') : f.key}
                     </span>
                   </div>
@@ -1093,9 +1141,33 @@ export default function LayoutStudio({ onStartExport, setExportStatus, onProgres
 
           {/* Batch Data Loader */}
           <div className="glass-panel p-4 space-y-3">
-            <h3 className="font-bold text-xs text-slate-300 uppercase tracking-wider">
-              Batch Data ({rows.length} rows)
-            </h3>
+            <div className="flex items-center justify-between">
+              <h3 className="font-bold text-xs uppercase tracking-wider text-main">
+                Batch Data ({rows.length} rows)
+              </h3>
+              {rows.length > 0 && (
+                <span className="badge badge-indigo text-[10px]">
+                  {selectedRowIndices.size} of {rows.length} Selected
+                </span>
+              )}
+            </div>
+
+            {rows.length > 0 && (
+              <div className="flex items-center justify-between gap-1 py-1 border-y border-slate-700/20 text-xs">
+                <button
+                  onClick={handleSelectAllRows}
+                  className="text-[11px] font-bold text-amber-500 hover:underline flex items-center gap-1"
+                >
+                  <CheckSquare className="w-3.5 h-3.5" /> Select All
+                </button>
+                <button
+                  onClick={handleDeselectAllRows}
+                  className="text-[11px] font-bold text-slate-400 hover:underline flex items-center gap-1"
+                >
+                  <Square className="w-3.5 h-3.5" /> Deselect All
+                </button>
+              </div>
+            )}
 
             <input
               type="file"
@@ -1110,16 +1182,16 @@ export default function LayoutStudio({ onStartExport, setExportStatus, onProgres
                 onClick={() => dataFileInputRef.current?.click()}
                 className="btn-secondary text-[11px] justify-center"
               >
-                <FileSpreadsheet className="w-3.5 h-3.5 text-indigo-400" /> Upload CSV/XLSX
+                <FileSpreadsheet className="w-3.5 h-3.5 text-indigo-500" /> Upload CSV/XLSX
               </button>
 
               <button
                 onClick={() => setIsDataEditorOpen(true)}
                 disabled={rows.length === 0}
-                className="btn-secondary text-[11px] justify-center border-indigo-500/40 text-indigo-300 disabled:opacity-40 disabled:cursor-not-allowed"
+                className="btn-secondary text-[11px] justify-center border-indigo-500/40 text-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed"
                 title={rows.length === 0 ? 'Upload CSV/XLSX file to edit data table' : 'Edit Data Table'}
               >
-                <Table className="w-3.5 h-3.5 text-indigo-400" /> Edit Data Table
+                <Table className="w-3.5 h-3.5 text-indigo-500" /> Edit Data Table
               </button>
             </div>
 
@@ -1135,7 +1207,7 @@ export default function LayoutStudio({ onStartExport, setExportStatus, onProgres
             </button>
             <button
               onClick={handleGenerateBatchZip}
-              disabled={layouts.length === 0 || rows.length === 0 || localExportStatus.isExporting}
+              disabled={layouts.length === 0 || rows.length === 0 || selectedRowIndices.size === 0 || localExportStatus.isExporting}
               className="btn-gold text-sm w-full py-3 justify-center shadow-lg shadow-amber-500/20 disabled:opacity-40 font-bold flex items-center gap-2"
             >
               {localExportStatus.isExporting ? (
@@ -1146,7 +1218,11 @@ export default function LayoutStudio({ onStartExport, setExportStatus, onProgres
               ) : (
                 <>
                   <Download className="w-4 h-4" />
-                  <span>Generate All (ZIP)</span>
+                  <span>
+                    {selectedRowIndices.size === 0
+                      ? 'No Rows Selected'
+                      : `Generate Selected (${selectedRowIndices.size} ZIP)`}
+                  </span>
                 </>
               )}
             </button>

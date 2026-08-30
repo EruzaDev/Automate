@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Contact, QrCode, Sliders, Download, Plus, Trash2, GitBranch, Layers, CheckCircle2, Eye, Sparkles } from 'lucide-react';
+import { Contact, QrCode, Sliders, Download, Plus, Trash2, GitBranch, Layers, CheckCircle2, Eye, Sparkles, CheckSquare, Square } from 'lucide-react';
 import CsvUploader from '../Shared/CsvUploader';
 import ManualDataEntryModal from '../Shared/ManualDataEntryModal';
 import { createSampleTeamBadgeBackground, SAMPLE_CSV_DATA } from '../Shared/SampleDataPresets';
@@ -8,6 +8,7 @@ import { exportBatchToZip } from '../../utils/zipExporter';
 
 export default function BadgeEditor({ onStartExport, setExportStatus }) {
   const [records, setRecords] = useState(SAMPLE_CSV_DATA);
+  const [selectedRecordIndices, setSelectedRecordIndices] = useState(new Set(SAMPLE_CSV_DATA.map((_, i) => i)));
   const [columns, setColumns] = useState(['first_name', 'middle_name', 'last_name', 'nickname', 'section', 'year', 'department', 'role', 'student_id', 'layout_name', 'qr_data']);
   const [currentRecordIdx, setCurrentRecordIdx] = useState(0);
 
@@ -16,6 +17,23 @@ export default function BadgeEditor({ onStartExport, setExportStatus }) {
   const [canvasDimensions, setCanvasDimensions] = useState({ width: 600, height: 900 });
 
   const [dynamicLayoutColumn, setDynamicLayoutColumn] = useState('layout_name');
+
+  const handleSelectAllRecords = () => {
+    setSelectedRecordIndices(new Set(records.map((_, i) => i)));
+  };
+
+  const handleDeselectAllRecords = () => {
+    setSelectedRecordIndices(new Set());
+  };
+
+  const handleToggleRecordSelection = (idx) => {
+    setSelectedRecordIndices((prev) => {
+      const next = new Set(prev);
+      if (next.has(idx)) next.delete(idx);
+      else next.add(idx);
+      return next;
+    });
+  };
 
   const [textLayers, setTextLayers] = useState([
     {
@@ -148,18 +166,20 @@ export default function BadgeEditor({ onStartExport, setExportStatus }) {
   const cancelExportRef = useRef(false);
 
   const handleBatchExport = async () => {
-    if (records.length === 0) {
-      alert('Please load team records first!');
+    const selectedRecords = records.filter((_, idx) => selectedRecordIndices.has(idx));
+
+    if (selectedRecords.length === 0) {
+      alert('Please select at least 1 record to export!');
       return;
     }
 
     cancelExportRef.current = false;
 
     onStartExport();
-    setExportStatus({ isExporting: true, isFinished: false, progress: 0, total: records.length });
+    setExportStatus({ isExporting: true, isFinished: false, progress: 0, total: selectedRecords.length });
 
     await exportBatchToZip({
-      records,
+      records: selectedRecords,
       layerConfig: {
         backgroundImage: bgImageObj,
         textLayers,
@@ -190,22 +210,28 @@ export default function BadgeEditor({ onStartExport, setExportStatus }) {
   return (
     <div className="space-y-6 animate-fade-in">
       {/* Top Banner */}
-      <div className="glass-panel p-6 flex flex-col md:flex-row items-start md:items-center justify-between gap-4 border-emerald-500/20 bg-gradient-to-r from-emerald-950/20 via-slate-900 to-indigo-950/20">
+      <div className="glass-panel p-6 flex flex-col md:flex-row items-start md:items-center justify-between gap-4 border-emerald-500/20">
         <div>
           <div className="flex items-center gap-2.5">
-            <div className="w-9 h-9 rounded-xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center border border-emerald-500/30">
+            <div className="w-9 h-9 rounded-xl bg-emerald-500/20 text-emerald-500 flex items-center justify-center border border-emerald-500/30">
               <Contact className="w-5 h-5" />
             </div>
-            <h2 className="text-xl font-extrabold text-white tracking-tight">Team Badges & QR Generator Studio</h2>
+            <h2 className="text-xl font-extrabold text-main tracking-tight">Team Badges & QR Generator Studio</h2>
           </div>
-          <p className="text-xs text-slate-300 mt-1">
-            Generate team cards with <strong className="text-emerald-300">Conditional Fallback Rules</strong> (e.g. IF nickname is empty → USE first_name), <strong className="text-indigo-300 font-semibold">Data-Driven QR Codes</strong>, and CSV layout switching.
+          <p className="text-xs text-slate-400 mt-1">
+            Generate team cards with <strong className="text-emerald-500">Conditional Fallback Rules</strong> (e.g. IF nickname is empty → USE first_name), <strong className="text-indigo-500 font-semibold">Data-Driven QR Codes</strong>, and CSV layout switching.
           </p>
         </div>
 
-        <button onClick={handleBatchExport} className="btn-primary shadow-lg shadow-emerald-500/20">
+        <button
+          onClick={handleBatchExport}
+          disabled={selectedRecordIndices.size === 0}
+          className="btn-primary shadow-lg shadow-emerald-500/20 disabled:opacity-40"
+        >
           <Download className="w-4 h-4" />
-          Batch Export Badges ({records.length} Records)
+          {selectedRecordIndices.size === 0
+            ? 'No Records Selected'
+            : `Batch Export Selected (${selectedRecordIndices.size} Badges ZIP)`}
         </button>
       </div>
 
@@ -216,6 +242,7 @@ export default function BadgeEditor({ onStartExport, setExportStatus }) {
           <CsvUploader
             onDataLoaded={(parsedRecords, parsedHeaders) => {
               setRecords(parsedRecords);
+              setSelectedRecordIndices(new Set(parsedRecords.map((_, i) => i)));
               setColumns(parsedHeaders);
               setCurrentRecordIdx(0);
             }}
@@ -223,18 +250,18 @@ export default function BadgeEditor({ onStartExport, setExportStatus }) {
             currentRecordCount={records.length}
           />
 
-          {/* Record Selector & IF/ELSE Rule Live Evaluator */}
+          {/* Record Selector & Select All Toolbar */}
           {records.length > 0 && (
-            <div className="glass-panel p-4 space-y-3 bg-slate-900/60">
+            <div className="glass-panel p-4 space-y-3">
               <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2 text-xs font-semibold text-slate-300">
-                  <Eye className="w-4 h-4 text-emerald-400" />
+                <div className="flex items-center gap-2 text-xs font-semibold text-main">
+                  <Eye className="w-4 h-4 text-emerald-500" />
                   <span>Preview Record:</span>
                 </div>
                 <select
                   value={currentRecordIdx}
                   onChange={(e) => setCurrentRecordIdx(Number(e.target.value))}
-                  className="select-dark text-xs font-medium"
+                  className="select-dark text-xs font-medium max-w-[200px]"
                 >
                   {records.map((r, i) => (
                     <option key={i} value={i}>
@@ -244,13 +271,31 @@ export default function BadgeEditor({ onStartExport, setExportStatus }) {
                 </select>
               </div>
 
+              <div className="flex items-center justify-between gap-1 pt-2 border-t border-slate-700/20 text-xs">
+                <button
+                  onClick={handleSelectAllRecords}
+                  className="text-[11px] font-bold text-emerald-500 hover:underline flex items-center gap-1"
+                >
+                  <CheckSquare className="w-3.5 h-3.5" /> Select All ({records.length})
+                </button>
+                <button
+                  onClick={handleDeselectAllRecords}
+                  className="text-[11px] font-bold text-slate-400 hover:underline flex items-center gap-1"
+                >
+                  <Square className="w-3.5 h-3.5" /> Deselect All
+                </button>
+                <span className="badge badge-emerald text-[10px] ml-auto">
+                  {selectedRecordIndices.size} Selected
+                </span>
+              </div>
+
               {/* Conditional Indicator Card */}
-              <div className="p-3 rounded-xl bg-indigo-950/60 border border-indigo-500/30 text-xs text-indigo-200 flex items-center justify-between">
+              <div className="p-3 rounded-xl bg-indigo-500/10 border border-indigo-500/30 text-xs text-main flex items-center justify-between">
                 <span>
                   Rule Status: {currentRecord.nickname ? (
-                    <strong className="text-emerald-300">Using Nickname ("{currentRecord.nickname}")</strong>
+                    <strong className="text-emerald-500">Using Nickname ("{currentRecord.nickname}")</strong>
                   ) : (
-                    <strong className="text-amber-300">No Nickname → Fallback to First Name ("{currentRecord.first_name}")</strong>
+                    <strong className="text-amber-500">No Nickname → Fallback to First Name ("{currentRecord.first_name}")</strong>
                   )}
                 </span>
               </div>
@@ -261,8 +306,8 @@ export default function BadgeEditor({ onStartExport, setExportStatus }) {
           <div className="glass-panel p-5 space-y-4">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
-                <GitBranch className="w-4 h-4 text-indigo-400" />
-                <h3 className="font-bold text-sm text-white">Step 2: Conditional Fallback Rule Builder</h3>
+                <GitBranch className="w-4 h-4 text-indigo-500" />
+                <h3 className="font-bold text-sm text-main">Step 2: Conditional Fallback Rule Builder</h3>
               </div>
             </div>
 
@@ -274,8 +319,8 @@ export default function BadgeEditor({ onStartExport, setExportStatus }) {
                   onClick={() => setSelectedLayerId(layer.id)}
                   className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
                     selectedLayerId === layer.id
-                      ? 'bg-gradient-to-r from-emerald-600 to-teal-600 text-slate-950 shadow-md'
-                      : 'bg-slate-900 text-slate-400 hover:text-white border border-slate-800'
+                      ? 'bg-emerald-600 text-white shadow-md'
+                      : 'btn-secondary text-slate-400 hover:text-main'
                   }`}
                 >
                   {layer.name}
@@ -284,14 +329,14 @@ export default function BadgeEditor({ onStartExport, setExportStatus }) {
             </div>
 
             {selectedLayer && (
-              <div className="space-y-4 pt-3 border-t border-slate-800">
+              <div className="space-y-4 pt-3 border-t border-slate-700/30">
                 {/* Fallback Condition Toggle Card */}
-                <div className="p-3.5 rounded-xl bg-slate-950/90 border border-slate-800 space-y-2">
-                  <span className="text-xs font-bold text-amber-300 block">
+                <div className="p-3.5 rounded-xl glass-panel space-y-2">
+                  <span className="text-xs font-bold text-amber-500 block">
                     ⚡ Fallback Rule Configurator:
                   </span>
 
-                  <label className="flex items-center gap-2.5 text-xs text-slate-200 cursor-pointer">
+                  <label className="flex items-center gap-2.5 text-xs text-slate-400 cursor-pointer">
                     <input
                       type="checkbox"
                       checked={(selectedLayer.fallbackRules || []).some(
@@ -300,7 +345,7 @@ export default function BadgeEditor({ onStartExport, setExportStatus }) {
                       onChange={() => toggleLayerFallbackRule('nickname', 'first_name')}
                       className="accent-emerald-500 w-4 h-4 rounded"
                     />
-                    <span>IF <code className="text-indigo-300 font-mono">nickname</code> is empty → Fall back to <code className="text-emerald-300 font-mono">first_name</code></span>
+                    <span>IF <code className="text-indigo-500 font-mono">nickname</code> is empty → Fall back to <code className="text-emerald-500 font-mono">first_name</code></span>
                   </label>
                 </div>
 
@@ -347,7 +392,7 @@ export default function BadgeEditor({ onStartExport, setExportStatus }) {
                       type="color"
                       value={selectedLayer.color || '#ffffff'}
                       onChange={(e) => updateSelectedLayer({ color: e.target.value })}
-                      className="h-9 w-full rounded-lg bg-slate-900 border border-slate-800 cursor-pointer p-0.5"
+                      className="h-9 w-full rounded-lg border border-slate-700 cursor-pointer p-0.5"
                     />
                   </div>
                 </div>
@@ -358,14 +403,14 @@ export default function BadgeEditor({ onStartExport, setExportStatus }) {
           {/* Step 3: Data-Driven QR Code Engine */}
           <div className="glass-panel p-5 space-y-4">
             <div className="flex items-center gap-2">
-              <QrCode className="w-4 h-4 text-purple-400" />
-              <h3 className="font-bold text-sm text-white">Step 3: Data-Driven QR Code Engine</h3>
+              <QrCode className="w-4 h-4 text-purple-500" />
+              <h3 className="font-bold text-sm text-main">Step 3: Data-Driven QR Code Engine</h3>
             </div>
 
             {selectedQr && (
               <div className="space-y-3">
                 <div>
-                  <label className="text-xs font-semibold text-slate-300 block mb-1">
+                  <label className="text-xs font-semibold text-slate-400 block mb-1">
                     Map QR Payload to CSV Column:
                   </label>
                   <select
@@ -419,12 +464,12 @@ export default function BadgeEditor({ onStartExport, setExportStatus }) {
           {/* Step 4: CSV Layout Selector Column */}
           <div className="glass-panel p-5 space-y-3">
             <div className="flex items-center gap-2">
-              <Layers className="w-4 h-4 text-pink-400" />
-              <h3 className="font-bold text-sm text-white">Step 4: CSV Layout Switcher Column</h3>
+              <Layers className="w-4 h-4 text-pink-500" />
+              <h3 className="font-bold text-sm text-main">Step 4: CSV Layout Switcher Column</h3>
             </div>
 
             <div>
-              <label className="text-xs font-semibold text-slate-300 block mb-1">
+              <label className="text-xs font-semibold text-slate-400 block mb-1">
                 CSV Column Driving Design Layouts:
               </label>
               <select
@@ -444,7 +489,7 @@ export default function BadgeEditor({ onStartExport, setExportStatus }) {
         <div className="lg:col-span-7 md:col-span-12 space-y-4">
           <div className="glass-panel p-5 space-y-4 sticky top-20">
             <div className="flex flex-wrap items-center justify-between gap-3">
-              <h3 className="font-bold text-base text-white">Live Team Badge Preview</h3>
+              <h3 className="font-bold text-base text-main">Live Team Badge Preview</h3>
 
               <div className="flex items-center gap-2">
                 <input
@@ -463,18 +508,18 @@ export default function BadgeEditor({ onStartExport, setExportStatus }) {
               </div>
             </div>
 
-            <div className="w-full overflow-auto bg-slate-950/90 p-4 rounded-2xl border border-slate-800 flex justify-center shadow-inner">
+            <div className="w-full overflow-auto glass-panel p-4 rounded-2xl flex justify-center shadow-inner">
               <canvas
                 ref={canvasRef}
                 width={canvasDimensions.width}
                 height={canvasDimensions.height}
-                className="max-w-full h-auto rounded-xl shadow-2xl border border-slate-800/80"
+                className="max-w-full h-auto rounded-xl shadow-2xl border border-slate-700/40"
               />
             </div>
 
             <div className="flex justify-between text-xs text-slate-400 px-1 font-medium">
               <span>Badge Canvas: {canvasDimensions.width} x {canvasDimensions.height} px</span>
-              <span className="text-emerald-400">Dynamic Fallback & QR Engine Active</span>
+              <span className="text-emerald-500">Dynamic Fallback & QR Engine Active</span>
             </div>
           </div>
         </div>
@@ -488,6 +533,7 @@ export default function BadgeEditor({ onStartExport, setExportStatus }) {
         initialColumns={columns}
         onSave={(updatedRecords, updatedCols) => {
           setRecords(updatedRecords);
+          setSelectedRecordIndices(new Set(updatedRecords.map((_, i) => i)));
           setColumns(updatedCols);
           setCurrentRecordIdx(0);
         }}
