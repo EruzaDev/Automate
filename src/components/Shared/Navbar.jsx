@@ -5,10 +5,13 @@ export default function Navbar({ activeTab, setActiveTab, onLoadPresetData, them
   return (
     <header className="sticky top-0 z-40 border-b border-slate-800/80 glass-panel !rounded-none backdrop-blur-2xl px-4 lg:px-8 py-3 shadow-2xl transition-colors duration-300">
       <div className="max-w-7xl mx-auto flex items-center justify-between gap-4">
-        {/* Clean Brand Title */}
-        <h1 className="font-black text-2xl tracking-tight">
-          Automate
-        </h1>
+        {/* Clean Brand Title with Logo */}
+        <div className="flex items-center gap-2.5">
+          <img src="/logo.png" alt="Automate Logo" className="w-8 h-8 object-contain drop-shadow" />
+          <h1 className="font-black text-2xl tracking-tight">
+            Automate
+          </h1>
+        </div>
 
         <div className="flex items-center gap-3">
           {/* Studio Navigation Tabs */}
