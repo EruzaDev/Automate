@@ -14,6 +14,7 @@ export default function LayoutStudio({ onStartExport, setExportStatus, onProgres
 
   // Folder Hierarchy Sort State
   const [folderSortColumns, setFolderSortColumns] = useState([]);
+  const [folderStructureMode, setFolderStructureMode] = useState('combined'); // 'combined' | 'nested'
 
   const handleAddFolderSortColumn = (colKey) => {
     if (!colKey || folderSortColumns.includes(colKey)) return;
@@ -482,6 +483,7 @@ export default function LayoutStudio({ onStartExport, setExportStatus, onProgres
       layouts,
       layoutColumnKey,
       folderSortColumns,
+      folderStructureMode,
       onProgress: (current, total) => {
         const curStatus = { isExporting: true, isFinished: false, progress: current, total };
         setLocalExportStatus(curStatus);
@@ -1458,13 +1460,13 @@ export default function LayoutStudio({ onStartExport, setExportStatus, onProgres
                 disabled={rows.length === 0}
               >
                 <option value="" disabled>
-                  {rows.length === 0 ? 'Upload dataset to add folder levels...' : '+ Add Folder Hierarchy Level...'}
+                  {rows.length === 0 ? 'Upload dataset to add folder levels...' : '+ Add Folder Column...'}
                 </option>
                 {headers
                   .filter((h) => !folderSortColumns.includes(h))
                   .map((h) => (
                     <option key={h} value={h}>
-                      Subfolder by: {h}
+                      Sort by: {h}
                     </option>
                   ))}
               </select>
@@ -1474,10 +1476,44 @@ export default function LayoutStudio({ onStartExport, setExportStatus, onProgres
               </span>
             )}
 
+            {/* Folder Naming Mode Selector */}
+            {folderSortColumns.length > 0 && (
+              <div className="space-y-1 pt-1">
+                <label className="text-[11px] font-semibold text-slate-400 block">Folder Format:</label>
+                <div className="grid grid-cols-2 gap-1.5 bg-slate-950 p-1 rounded-xl border border-slate-800">
+                  <button
+                    type="button"
+                    onClick={() => setFolderStructureMode('combined')}
+                    className={`py-1 px-2 rounded-lg font-bold text-[10px] transition-all ${
+                      folderStructureMode === 'combined'
+                        ? 'bg-amber-500 text-slate-950 shadow'
+                        : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    Combined (e.g. "BSCS 1 B")
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setFolderStructureMode('nested')}
+                    className={`py-1 px-2 rounded-lg font-bold text-[10px] transition-all ${
+                      folderStructureMode === 'nested'
+                        ? 'bg-amber-500 text-slate-950 shadow'
+                        : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    Nested (e.g. "BSCS / 1 / B")
+                  </button>
+                </div>
+              </div>
+            )}
+
             {/* Folder Structure Preview Path */}
             {folderSortColumns.length > 0 && (
               <div className="p-2 rounded-lg bg-amber-500/10 border border-amber-500/20 text-[10px] font-mono text-amber-300 truncate">
-                ZIP / {folderSortColumns.map((c) => `{${c}}`).join(' / ')} / Certificate.png
+                ZIP / {folderStructureMode === 'combined'
+                  ? folderSortColumns.map((c) => `{${c}}`).join(' ')
+                  : folderSortColumns.map((c) => `{${c}}`).join(' / ')
+                } / Certificate.png
               </div>
             )}
           </div>

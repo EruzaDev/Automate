@@ -162,6 +162,7 @@ export async function exportLayoutsToZip({
   layouts,
   layoutColumnKey = '',
   folderSortColumns = [],
+  folderStructureMode = 'combined',
   maxDimension = 2560,
   onProgress,
   shouldCancel
@@ -214,13 +215,19 @@ export async function exportLayoutsToZip({
             const rawVal = row[colKey];
             const cleanVal = String(rawVal !== undefined && rawVal !== null ? rawVal : '')
               .trim()
-              .replace(/[\/\\?%*:|"<>]/g, '_');
+              .replace(/[\/\\?%*:|"<>]/g, '');
             return cleanVal || 'Uncategorized';
           })
           .filter(Boolean);
 
         if (folderSegments.length > 0) {
-          zipFilePath = `${folderSegments.join('/')}/${safeName}_${i + 1}.png`;
+          if (folderStructureMode === 'nested') {
+            zipFilePath = `${folderSegments.join('/')}/${safeName}_${i + 1}.png`;
+          } else {
+            // Combined Folder Mode: e.g. "BSCS 1 B"
+            const combinedFolderName = folderSegments.join(' ');
+            zipFilePath = `${combinedFolderName}/${safeName}_${i + 1}.png`;
+          }
         }
       }
 
