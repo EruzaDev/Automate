@@ -600,7 +600,7 @@ export default function InteractiveStage({
                               }`}
                               style={{
                                 color: tok.color || field.color || '#ffffff',
-                                fontWeight: tok.bold ? '700' : '400',
+                                fontWeight: tok.bold ? (field.fontWeight === '400' ? '700' : (field.fontWeight || '700')) : '400',
                                 fontStyle: tok.italic ? 'italic' : 'normal',
                                 letterSpacing: `${field.letterSpacing || 0}px`,
                                 wordSpacing: `${field.wordSpacing || 0}px`,
