@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Trophy, X, Check, Award, Sliders, Users, Sparkles } from 'lucide-react';
 
 export default function RankingConfigModal({
@@ -21,6 +21,13 @@ export default function RankingConfigModal({
     4: '4th Place',
     5: '5th Place'
   });
+
+  useEffect(() => {
+    if (isOpen) {
+      setSelectedScoreCol(scoreColumn || (headers[0] || ''));
+      setSelectedScheme(titleScheme || 'championship');
+    }
+  }, [isOpen, scoreColumn, titleScheme, headers]);
 
   if (!isOpen) return null;
 

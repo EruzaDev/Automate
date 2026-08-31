@@ -13,45 +13,45 @@ export function toOrdinal(n) {
 export function getPlacementTitle(rankNum, titleScheme = 'championship', customTitles = {}) {
   const num = parseInt(rankNum, 10) || 1;
 
+  if (titleScheme === 'custom') {
+    if (customTitles && customTitles[num]) return customTitles[num];
+    return (customTitles && customTitles.default) || `${toOrdinal(num)} Place`;
+  }
+
   if (titleScheme === 'championship') {
-    if (customTitles[num]) return customTitles[num];
     switch (num) {
       case 1: return 'Champion';
       case 2: return '1st Runner-Up';
       case 3: return '2nd Runner-Up';
       case 4: return '3rd Runner-Up';
       case 5: return '4th Runner-Up';
-      default: return customTitles.default || 'Finalist';
+      default: return 'Finalist';
     }
   }
 
   if (titleScheme === 'placement_words' || titleScheme === 'ordinal_words' || titleScheme === 'first_place') {
-    if (customTitles[num]) return customTitles[num];
     switch (num) {
       case 1: return 'First Place';
       case 2: return 'Second Place';
       case 3: return 'Third Place';
       case 4: return 'Fourth Place';
       case 5: return 'Fifth Place';
-      default: return customTitles.default || `${toOrdinal(num)} Place`;
+      default: return `${toOrdinal(num)} Place`;
     }
   }
 
   if (titleScheme === 'mixed') {
-    if (customTitles[num]) return customTitles[num];
     switch (num) {
       case 1: return 'Champion';
       case 2: return 'Second Place';
       case 3: return 'Third Place';
       case 4: return 'Fourth Place';
       case 5: return 'Fifth Place';
-      default: return customTitles.default || `${toOrdinal(num)} Place`;
+      default: return `${toOrdinal(num)} Place`;
     }
   }
 
-  // Custom Scheme / Fallback
-  if (customTitles[num]) return customTitles[num];
-  return customTitles.default || `${toOrdinal(num)} Place`;
+  return `${toOrdinal(num)} Place`;
 }
 
 // Automatically detect columns in dataset that likely contain numeric scores/ratings
