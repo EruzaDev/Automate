@@ -1,26 +1,90 @@
-import { stripRichTextFormatting } from './richTextParser';
+import { getPlacementTitle, toOrdinal } from './tabulationEngine.js';
+
+// Sample fallback values for visual preview when no CSV data is loaded yet
+function getSampleValue(keyName, titleScheme = 'championship', rankNum = 1) {
+  const k = String(keyName).toLowerCase();
+  const rNum = parseInt(rankNum, 10) || 1;
+  if (k.includes('first')) return 'John';
+  if (k.includes('last')) return 'Doe';
+  if (k.includes('middle')) return 'Milla';
+  if (k.includes('rank_title') || k.includes('ranktitle') || k.includes('placement') || k.includes('award') || k === 'title') {
+    return getPlacementTitle(rNum, titleScheme);
+  }
+  if (k.includes('rank') || k.includes('ordinal')) return `${toOrdinal(rNum)} Place`;
+  if (k.includes('score') || k.includes('point')) return '98.5';
+  if (k.includes('course') || k.includes('degree') || k.includes('program')) return 'Computer Science';
+  if (k.includes('section') || k.includes('class')) return 'Section A';
+  if (k.includes('date')) return 'August 31, 2026';
+  if (k.includes('company') || k.includes('org')) return 'Global Technologies';
+  return `{${keyName}}`;
+}
 
 // Evaluate text content for a field: custom message template OR multi-column combination OR single key
 export function evaluateFieldText(field, dataRow = {}) {
   if (!field) return '';
   const row = dataRow || {};
+  const hasRowData = Object.keys(row).length > 0;
 
   let rawString = '';
 
-  // Mode 1: Custom Message Template (e.g., "Awarded to ***{first_name} {last_name}*** for {Course}")
-  if (field.isCustomMessage && field.customTemplate) {
-    rawString = field.customTemplate.replace(/\{([^}]+)\}/g, (_, key) => {
-      const trimmedKey = key.trim();
+  // Mode 1: Custom Message Template (e.g., "Awarded to ***{first_name} {middle_name_initial} {last_name}*** for {Course}")
+  if (field.isCustomMessage) {
+    const tpl = field.customTemplate !== undefined && field.customTemplate !== null ? field.customTemplate : '';
+    rawString = tpl.replace(/\{([^}]+)\}/g, (_, key) => {
+      let trimmedKey = key.trim();
+      let isInitial = false;
 
-      // Case-insensitive lookup in dataRow
-      let val = row[trimmedKey];
-      if (val === undefined) {
-        const lowerKey = trimmedKey.toLowerCase();
-        const foundKey = Object.keys(row).find((k) => String(k).trim().toLowerCase() === lowerKey);
-        if (foundKey) val = row[foundKey];
+      // Detect initial modifiers (e.g., middle_name_initial, middle_name.initial, middle_name:initial)
+      if (trimmedKey.toLowerCase().endsWith('_initial')) {
+        isInitial = true;
+        trimmedKey = trimmedKey.slice(0, -8).trim();
+      } else if (trimmedKey.toLowerCase().endsWith('.initial') || trimmedKey.toLowerCase().endsWith(':initial')) {
+        isInitial = true;
+        trimmedKey = trimmedKey.slice(0, -8).trim();
       }
 
-      const finalStr = val !== undefined && val !== null ? String(val) : '';
+      // Case-insensitive lookup in dataRow with dynamic rank fallback
+      const lowerKey = trimmedKey.toLowerCase().replace(/[\s_]+/g, '');
+      let val;
+      if (lowerKey.includes('ranktitle') || lowerKey.includes('placement') || lowerKey === 'title') {
+        val = row._rank_title !== undefined ? row._rank_title : (row._rank_title || row.rank_title || row['Rank Title'] || row['rank_title'] || row.placement || row.Title || row.Award);
+      } else {
+        val = row[trimmedKey];
+      }
+
+      if (val === undefined) {
+        // Check dynamic tabulation aliases
+        if (lowerKey.includes('ranktitle') || lowerKey.includes('placement') || lowerKey.includes('award') || lowerKey === 'title') {
+          val = row._rank_title || row.rank_title || row['Rank Title'] || row['rank_title'] || row.placement || row.Title || row.Award;
+        } else if (lowerKey.includes('rank') || lowerKey.includes('ordinal')) {
+          val = row._rank || row.rank || row['Rank'] || row['rank'];
+        } else if (lowerKey.includes('ranknum') || lowerKey.includes('ranknumber')) {
+          val = row._rank_num || row.rank_num || row['Rank Num'] || row['Rank Number'];
+        } else if (lowerKey.includes('score') || lowerKey.includes('points')) {
+          val = row._score || row.score || row['Score'] || row['Points'];
+        }
+        
+        if (val === undefined) {
+          const foundKey = Object.keys(row).find((k) => String(k).trim().toLowerCase().replace(/[\s_]+/g, '') === lowerKey);
+          if (foundKey) val = row[foundKey];
+        }
+      }
+
+      let finalStr = '';
+      if (val !== undefined && val !== null && String(val).trim() !== '') {
+        finalStr = String(val).trim();
+      } else {
+        const activeScheme = row._titleScheme || field?.titleScheme || 'championship';
+        const rNum = row._rank_num || row.rank_num || 1;
+        finalStr = getSampleValue(trimmedKey, activeScheme, rNum);
+      }
+
+      // If initial requested, extract first letter and append period (e.g. "Alexander" -> "A.")
+      if (isInitial && finalStr.length > 0) {
+        const cleanChar = finalStr.startsWith('{') ? 'M' : finalStr.charAt(0);
+        finalStr = cleanChar.toUpperCase() + '.';
+      }
+
       return applyCasing(finalStr, field.casing);
     });
   }
@@ -65,12 +129,29 @@ export function evaluateFieldText(field, dataRow = {}) {
   }
   // Mode 3: Single Column Key
   else if (field.key) {
-    let val = row[field.key];
+    const lowerKey = String(field.key).trim().toLowerCase().replace(/[\s_]+/g, '');
+    let val;
+    if (lowerKey.includes('ranktitle') || lowerKey.includes('placement') || lowerKey === 'title' || lowerKey === 'champion') {
+      val = row._rank_title !== undefined ? row._rank_title : (row.rank_title || row['Rank Title'] || row.placement || row.Title);
+    } else if (lowerKey.includes('rank') || lowerKey.includes('ordinal')) {
+      val = row._rank !== undefined ? row._rank : (row.rank || row['Rank']);
+    } else if (lowerKey.includes('score') || lowerKey.includes('points')) {
+      val = row._score !== undefined ? row._score : (row.score || row['Score']);
+    } else {
+      val = row[field.key];
+    }
+
     if (val === undefined) {
-      const lowerKey = String(field.key).trim().toLowerCase();
-      const foundKey = Object.keys(row).find((k) => String(k).trim().toLowerCase() === lowerKey);
+      const foundKey = Object.keys(row).find((k) => String(k).trim().toLowerCase().replace(/[\s_]+/g, '') === lowerKey);
       if (foundKey) val = row[foundKey];
     }
+
+    if (val === undefined && (lowerKey.includes('ranktitle') || lowerKey.includes('placement') || lowerKey === 'champion')) {
+      const activeScheme = row._titleScheme || field?.titleScheme || 'championship';
+      const rNum = row._rank_num || row.rank_num || 1;
+      val = getSampleValue('rank_title', activeScheme, rNum);
+    }
+
     rawString = applyCasing(String(val !== undefined ? val : field.key), field.casing);
   }
 

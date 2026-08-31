@@ -1,12 +1,16 @@
 import QRCode from 'qrcode';
 import JSZip from 'jszip';
-import { fitFontSize } from './fitText';
+import { fitFontSize, formatCanvasFont } from './fitText';
 import { evaluateFieldText } from './multiColumnEvaluator';
-import { parseRichTextTokens, stripRichTextFormatting } from './richTextParser';
+import { parseRichTextTokens, parseStyledTextTokens, stripRichTextFormatting, getDOMLineBreaks } from './richTextParser';
 
 // Render a single record row on a high-resolution export canvas with exact proportional scale matching stage viewport
-export async function renderRecordToCanvas(dataRow, layout, canvas, stageWidth = 620, maxDimension = 2560) {
+export async function renderRecordToCanvas(dataRow, layout, canvas, stageWidth = 880, maxDimension = 2560) {
   if (!layout || !layout.image) return canvas;
+
+  if (typeof document !== 'undefined' && document.fonts && document.fonts.ready) {
+    try { await document.fonts.ready; } catch (e) {}
+  }
 
   const rawWidth = layout.image.naturalWidth || layout.image.width || 1200;
   const rawHeight = layout.image.naturalHeight || layout.image.height || 800;
@@ -35,8 +39,8 @@ export async function renderRecordToCanvas(dataRow, layout, canvas, stageWidth =
   // Draw layout background image
   ctx.drawImage(layout.image, 0, 0, rawWidth, rawHeight);
 
-  // Proportional resolution scale ratio relative to interactive stage canvas (stageWidth = 620px)
-  const scaleRatio = rawWidth / (stageWidth || 620);
+  // Proportional resolution scale ratio relative to interactive stage canvas (baseStageWidth = 880px)
+  const scaleRatio = rawWidth / (stageWidth || 880);
 
   // Draw each field bounding box onto canvas
   for (const field of layout.fields || []) {
@@ -66,61 +70,132 @@ export async function renderRecordToCanvas(dataRow, layout, canvas, stageWidth =
         wordSpacing,
         scaledMaxFont,
         minFont,
-        field.isFixedFontSize || false
+        field.allowWrap || field.isFixedFontSize || false
       );
-
       ctx.letterSpacing = `${letterSpacing}px`;
       ctx.wordSpacing = `${wordSpacing}px`;
       ctx.fillStyle = field.color || '#ffffff';
       ctx.textBaseline = 'middle';
 
-      const tokens = parseRichTextTokens(text);
-      const cleanTotalText = stripRichTextFormatting(text);
+      // Resolve styledTags dictionary for evaluated tag tokens
+      const resolvedStyledTags = {};
+      if (field.styledTags) {
+        Object.keys(field.styledTags).forEach((k) => {
+          if (field.styledTags[k]) {
+            resolvedStyledTags[k] = field.styledTags[k];
+            if (k.startsWith('{') && k.endsWith('}')) {
+              const evalK = evaluateFieldText({ isCustomMessage: true, customTemplate: k, casing: field.casing }, dataRow || {});
+              if (evalK && String(evalK).trim() && !String(evalK).startsWith('{')) {
+                resolvedStyledTags[String(evalK).trim()] = field.styledTags[k];
+              }
+            }
+          }
+        });
+      }
 
-      // Calculate starting position based on alignment
-      ctx.font = `${baseFontWeight} ${fontSize}px ${baseFontFamily}`;
-      const totalWidth = ctx.measureText(cleanTotalText).width;
+      const tokens = parseStyledTextTokens(text, resolvedStyledTags, {
+        bold: baseFontWeight === '700' || baseFontWeight === 'bold',
+        italic: field.fontStyle === 'italic',
+        strike: Boolean(field.strikethrough),
+        underline: Boolean(field.underline)
+      });
 
-      let currentX = boxX + (boxW - totalWidth) / 2; // Center default
-      if (field.align === 'left') { currentX = boxX + (4 * scaleRatio); }
-      if (field.align === 'right') { currentX = boxX + boxW - totalWidth - (4 * scaleRatio); }
+      const maxLineWidth = boxW - (8 * scaleRatio);
+      const lineHeight = fontSize * 1.2;
+      const unscaledFittedFontSize = fontSize / scaleRatio;
 
-      const textY = boxY + boxH / 2;
+      // Split into wrapped lines if allowWrap is true using real DOM layout measurement
+      const lines = [];
+      if (field.allowWrap) {
+        const domLines = getDOMLineBreaks(
+          text,
+          resolvedStyledTags,
+          { ...field, fontSize: unscaledFittedFontSize },
+          (boxW / scaleRatio) - 8
+        );
 
-      // Draw each token styled segment
-      for (const token of tokens) {
-        let weight = baseFontWeight;
-        if (token.bold) weight = '700';
-        let style = '';
-        if (token.italic) style = 'italic ';
+        if (domLines && domLines.length > 0) {
+          domLines.forEach((dLine) => {
+            lines.push(
+              dLine.map((t) => {
+                let weight = baseFontWeight;
+                if (t.bold) weight = '700';
+                let style = t.italic ? 'italic' : '';
+                ctx.font = formatCanvasFont(style, weight, fontSize, baseFontFamily);
+                return { ...t, width: ctx.measureText(t.text).width };
+              })
+            );
+          });
+        } else {
+          lines.push(
+            tokens.map((t) => {
+              let weight = baseFontWeight;
+              if (t.bold) weight = '700';
+              let style = t.italic ? 'italic' : '';
+              ctx.font = formatCanvasFont(style, weight, fontSize, baseFontFamily);
+              return { ...t, width: ctx.measureText(t.text).width };
+            })
+          );
+        }
+      } else {
+        lines.push(
+          tokens.map((t) => {
+            let weight = baseFontWeight;
+            if (t.bold) weight = '700';
+            let style = t.italic ? 'italic' : '';
+            ctx.font = formatCanvasFont(style, weight, fontSize, baseFontFamily);
+            return { ...t, width: ctx.measureText(t.text).width };
+          })
+        );
+      }
 
-        ctx.font = `${style}${weight} ${fontSize}px ${baseFontFamily}`;
-        ctx.textAlign = 'left';
-        ctx.fillText(token.text, currentX, textY);
+      const totalBlockHeight = lines.length * lineHeight;
+      let startY = boxY + (boxH - totalBlockHeight) / 2 + lineHeight / 2;
 
-        const tokenWidth = ctx.measureText(token.text).width;
+      for (const lineTokens of lines) {
+        const lineTotalWidth = lineTokens.reduce((sum, t) => sum + (t.width || 0), 0);
 
-        // Render Strikethrough
-        if (token.strike) {
-          ctx.beginPath();
-          ctx.lineWidth = Math.max(1 * scaleRatio, fontSize / 16);
-          ctx.strokeStyle = field.color || '#ffffff';
-          ctx.moveTo(currentX, textY);
-          ctx.lineTo(currentX + tokenWidth, textY);
-          ctx.stroke();
+        let currentX = boxX + (boxW - lineTotalWidth) / 2;
+        if (field.align === 'left') { currentX = boxX + (4 * scaleRatio); }
+        if (field.align === 'right') { currentX = boxX + boxW - lineTotalWidth - (4 * scaleRatio); }
+
+        for (const token of lineTokens) {
+          let weight = baseFontWeight;
+          if (token.bold) weight = '700';
+          let style = token.italic ? 'italic' : '';
+
+          ctx.font = formatCanvasFont(style, weight, fontSize, baseFontFamily);
+          ctx.fillStyle = token.color || field.color || '#ffffff';
+          ctx.textAlign = 'left';
+          ctx.fillText(token.text, currentX, startY);
+
+          const tokenWidth = token.width !== undefined ? token.width : ctx.measureText(token.text).width;
+
+          // Render Strikethrough
+          if (token.strike) {
+            ctx.beginPath();
+            ctx.lineWidth = Math.max(1 * scaleRatio, fontSize / 16);
+            ctx.strokeStyle = field.color || '#ffffff';
+            ctx.moveTo(currentX, startY);
+            ctx.lineTo(currentX + tokenWidth, startY);
+            ctx.stroke();
+          }
+
+          // Render Underline
+          if (token.underline) {
+            ctx.beginPath();
+            ctx.lineWidth = Math.max(1 * scaleRatio, fontSize / 16);
+            ctx.strokeStyle = field.color || '#ffffff';
+            const underlineY = startY + fontSize * 0.4;
+            ctx.moveTo(currentX, underlineY);
+            ctx.lineTo(currentX + tokenWidth, underlineY);
+            ctx.stroke();
+          }
+
+          currentX += tokenWidth;
         }
 
-        // Render Underline
-        if (token.underline) {
-          ctx.beginPath();
-          ctx.lineWidth = Math.max(1 * scaleRatio, fontSize / 16);
-          ctx.strokeStyle = field.color || '#ffffff';
-          ctx.moveTo(currentX, textY + fontSize * 0.45);
-          ctx.lineTo(currentX + tokenWidth, textY + fontSize * 0.45);
-          ctx.stroke();
-        }
-
-        currentX += tokenWidth;
+        startY += lineHeight;
       }
     } else if (field.type === 'qr') {
       const rawVal = dataRow && dataRow[field.key] !== undefined && dataRow[field.key] !== ''
@@ -165,7 +240,9 @@ export async function exportLayoutsToZip({
   folderStructureMode = 'combined',
   maxDimension = 2560,
   safeMemoryMode = false,
-  batchChunkSize = 500, // Maximum items per ZIP file volume to keep RAM low
+  batchChunkSize = 100, // Default 100 items per ZIP volume for smooth memory management
+  exportFormat = 'png', // 'png' | 'jpeg'
+  exportQuality = 0.92,
   onProgress,
   onZipProgress,
   shouldCancel
@@ -180,15 +257,18 @@ export async function exportLayoutsToZip({
     return match || layouts[0];
   };
 
-  const getCanvasBlob = (canvas) => {
+  const getCanvasBlob = (canvas, format = 'png', quality = 0.92) => {
     return new Promise((resolve) => {
-      canvas.toBlob((blob) => resolve(blob), 'image/png');
+      const mime = (format === 'jpeg' || format === 'jpg') ? 'image/jpeg' : 'image/png';
+      canvas.toBlob((blob) => resolve(blob), mime, quality);
     });
   };
 
   const total = rows.length;
-  const chunkSize = (batchChunkSize && batchChunkSize > 0) ? batchChunkSize : 500;
+  const chunkSize = (batchChunkSize && batchChunkSize > 0) ? batchChunkSize : 100;
   const totalVolumes = Math.ceil(total / chunkSize);
+
+  const fileExt = (exportFormat === 'jpeg' || exportFormat === 'jpg') ? 'jpg' : 'png';
 
   for (let vol = 0; vol < totalVolumes; vol++) {
     if (shouldCancel && shouldCancel()) {
@@ -208,9 +288,9 @@ export async function exportLayoutsToZip({
       const layout = resolveLayoutForRow(row);
 
       if (layout) {
-        await renderRecordToCanvas(row, layout, exportCanvas, 620, maxDimension);
+        await renderRecordToCanvas(row, layout, exportCanvas, 880, maxDimension);
         
-        const blob = await getCanvasBlob(exportCanvas);
+        const blob = await getCanvasBlob(exportCanvas, exportFormat, exportQuality);
 
         // Reset export canvas backing store to free GPU texture RAM immediately
         exportCanvas.width = 0;
@@ -227,7 +307,7 @@ export async function exportLayoutsToZip({
           .replace(/\s+/g, '_') || `record_${i + 1}`;
 
         // Build folder hierarchy path if folderSortColumns is provided
-        let zipFilePath = `${safeName}_${i + 1}.png`;
+        let zipFilePath = `${safeName}_${i + 1}.${fileExt}`;
         if (Array.isArray(folderSortColumns) && folderSortColumns.length > 0) {
           const folderSegments = folderSortColumns
             .map((colKey) => {
@@ -241,11 +321,11 @@ export async function exportLayoutsToZip({
 
           if (folderSegments.length > 0) {
             if (folderStructureMode === 'nested') {
-              zipFilePath = `${folderSegments.join('/')}/${safeName}_${i + 1}.png`;
+              zipFilePath = `${folderSegments.join('/')}/${safeName}_${i + 1}.${fileExt}`;
             } else {
-              // Combined Folder Mode: e.g. "BSCS 1 B"
+              // Combined Folder Mode: e.g. "BSCS 3 A" ({program} {year} {section})
               const combinedFolderName = folderSegments.join(' ');
-              zipFilePath = `${combinedFolderName}/${safeName}_${i + 1}.png`;
+              zipFilePath = `${combinedFolderName}/${safeName}_${i + 1}.${fileExt}`;
             }
           }
         }

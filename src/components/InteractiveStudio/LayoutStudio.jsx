@@ -1,44 +1,62 @@
-import React, { useState, useRef } from 'react';
-import { Layout, Plus, Trash2, FileSpreadsheet, Download, Type, QrCode, Sliders, ArrowUp, ArrowDown, FolderPlus, FolderTree, Bold, Italic, Strikethrough, Underline, MessageSquare, Search, Table, Eye, CheckCircle, Loader2, CheckSquare, Square, HelpCircle, ShieldAlert, ShieldCheck } from 'lucide-react';
+import React, { useState, useRef, useEffect } from 'react';
+import { Layout, Plus, Trash2, FileSpreadsheet, Download, Type, QrCode, Sliders, ArrowUp, ArrowDown, FolderPlus, FolderTree, Bold, Italic, Strikethrough, Underline, MessageSquare, Search, Table, Eye, CheckCircle, Loader2, CheckSquare, Square, HelpCircle, ShieldAlert, ShieldCheck, Trophy, Award, Edit3, Check, Settings, Layers, Sparkles, Filter, Medal, Tag, ChevronDown, ChevronUp, Palette, AlignLeft, AlignCenter, AlignRight, RotateCcw, RotateCw, WholeWord, Sparkle, WrapText } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import InteractiveStage from './InteractiveStage';
 import CSVDataEditorModal from '../Shared/CSVDataEditorModal';
+import RankingConfigModal from './RankingConfigModal';
+import DynamicTagModal from './DynamicTagModal';
+import ColorPickerModal from './ColorPickerModal';
 import { renderRecordToCanvas, exportLayoutsToZip } from '../../utils/batchRenderer';
 import { loadCustomFontFile, getLoadedCustomFonts } from '../../utils/fontLoader';
+import { tabulateRows, detectScoreColumns, getPlacementTitle } from '../../utils/tabulationEngine';
+import { stripRichTextFormatting } from '../../utils/richTextParser';
 
 export default function LayoutStudio({ onStartExport, setExportStatus, onProgressChange, onRegisterCancel }) {
-  // Layout Templates State (Clean start with no sample photos)
+  // Layout Templates State
   const [layouts, setLayouts] = useState([]);
   const [currentLayoutId, setCurrentLayoutId] = useState(null);
   const [layoutColumnKey, setLayoutColumnKey] = useState('template');
+  const [recordSearchTerm, setRecordSearchTerm] = useState('');
 
-  // Folder Hierarchy Sort State
-  const [folderSortColumns, setFolderSortColumns] = useState([]);
-  const [folderStructureMode, setFolderStructureMode] = useState('combined'); // 'combined' | 'nested'
-  const [exportResolution, setExportResolution] = useState(0); // Default 0 = Original (100% Native Resolution of imported certificate)
-  const [safeMemoryMode, setSafeMemoryMode] = useState(() => typeof window !== 'undefined' && ('ontouchstart' in window || (navigator.maxTouchPoints && navigator.maxTouchPoints > 0)));
+  // History Undo/Redo Stack State (Ctrl+Z / Ctrl+Y)
+  const [historyStack, setHistoryStack] = useState([]);
+  const [redoStack, setRedoStack] = useState([]);
+
+  // Modal Dialogs State
+  const [isRankingModalOpen, setIsRankingModalOpen] = useState(false);
+  const [isDynamicTagsModalOpen, setIsDynamicTagsModalOpen] = useState(false);
+  const [isExportSettingsModalOpen, setIsExportSettingsModalOpen] = useState(false);
+  const [isColorPickerOpen, setIsColorPickerOpen] = useState(false);
+
+  // Folder Hierarchy & Export Modal Settings State
+  const [exportBatchChunkSize, setExportBatchChunkSize] = useState(100);
+  const [exportFormat, setExportFormat] = useState('png'); // 'png' | 'jpeg'
+  const [exportQuality, setExportQuality] = useState(0.92);
+  const [exportResolution, setExportResolution] = useState(2560);
+  const [exportHierarchyColumns, setExportHierarchyColumns] = useState([]);
+  const [exportFolderMode, setExportFolderMode] = useState('combined'); // 'combined' | 'nested'
+  const [exportSafeMemoryMode, setExportSafeMemoryMode] = useState(false);
+  const [exportSortByHierarchy, setExportSortByHierarchy] = useState(true);
   const [isLargeBatchModalOpen, setIsLargeBatchModalOpen] = useState(false);
 
-  const handleAddFolderSortColumn = (colKey) => {
-    if (!colKey || folderSortColumns.includes(colKey)) return;
-    setFolderSortColumns((prev) => [...prev, colKey]);
-  };
+  // Tabulation State
+  const [scoreColumn, setScoreColumn] = useState('');
+  const [sortOrder, setSortOrder] = useState('desc');
+  const [titleScheme, setTitleScheme] = useState('championship');
+  const [customRankTitles, setCustomRankTitles] = useState({
+    1: 'Champion',
+    2: '1st Runner-Up',
+    3: '2nd Runner-Up',
+    4: '3rd Runner-Up',
+    5: '4th Runner-Up',
+    default: 'Participant'
+  });
 
-  const handleRemoveFolderSortColumn = (colKey) => {
-    setFolderSortColumns((prev) => prev.filter((c) => c !== colKey));
-  };
+  // Layout & Field Inline Renaming State
+  const [editingLayoutId, setEditingLayoutId] = useState(null);
+  const [editingFieldId, setEditingFieldId] = useState(null);
 
-  const handleMoveFolderSortColumn = (index, direction) => {
-    const next = [...folderSortColumns];
-    const targetIdx = direction === 'up' ? index - 1 : index + 1;
-    if (targetIdx < 0 || targetIdx >= next.length) return;
-    const temp = next[index];
-    next[index] = next[targetIdx];
-    next[targetIdx] = temp;
-    setFolderSortColumns(next);
-  };
-
-  // Local Batch Export Progress & Loading State
+  // Local Batch Progress State
   const [localExportStatus, setLocalExportStatus] = useState({
     isExporting: false,
     isFinished: false,
@@ -49,18 +67,28 @@ export default function LayoutStudio({ onStartExport, setExportStatus, onProgres
   // Selected Field State
   const [selectedFieldId, setSelectedFieldId] = useState(null);
 
-  // Custom Font State
+  // Custom Font State (Returned to Top!)
   const [customFonts, setCustomFonts] = useState([]);
   const fontFileInputRef = useRef(null);
   const templateTextareaRef = useRef(null);
 
-  // Batch CSV Data Rows & Selection State
+  // Batch Data Rows & Selection State
   const [rows, setRows] = useState([]);
   const [selectedRowIndices, setSelectedRowIndices] = useState(new Set());
   const [dataFileName, setDataFileName] = useState('');
 
+  // Tabulate dataset dynamically
+  const tabulatedRows = React.useMemo(() => {
+    return tabulateRows(rows, {
+      scoreColumn,
+      sortOrder,
+      titleScheme,
+      customTitles: customRankTitles
+    });
+  }, [rows, scoreColumn, sortOrder, titleScheme, customRankTitles]);
+
   const handleSelectAllRows = () => {
-    setSelectedRowIndices(new Set(rows.map((_, i) => i)));
+    setSelectedRowIndices(new Set(tabulatedRows.map((_, i) => i)));
   };
 
   const handleDeselectAllRows = () => {
@@ -76,32 +104,112 @@ export default function LayoutStudio({ onStartExport, setExportStatus, onProgres
     });
   };
 
+  // Quick Top Winner Selection Filter Buttons
+  const handleSelectTopN = (count) => {
+    if (!tabulatedRows.length) return;
+    const n = Math.min(count, tabulatedRows.length);
+    const newIndices = new Set();
+    for (let i = 0; i < n; i++) {
+      newIndices.add(i);
+    }
+    setSelectedRowIndices(newIndices);
+  };
+
+  // Layout & Field Inline Renaming
+  const handleRenameLayout = (layoutId, newName) => {
+    setLayouts((prev) =>
+      prev.map((l) => (l.id === layoutId ? { ...l, name: newName || 'Layout' } : l))
+    );
+  };
+
+  const handleRenameField = (fieldId, newName) => {
+    if (!currentLayoutId) return;
+    setLayouts((prev) =>
+      prev.map((l) => {
+        if (l.id !== currentLayoutId) return l;
+        return {
+          ...l,
+          fields: l.fields.map((f) => (f.id === fieldId ? { ...f, name: newName || f.type } : f))
+        };
+      })
+    );
+  };
+
   // CSV Data Editor Modal & Live Search / Preview Row State
   const [isDataEditorOpen, setIsDataEditorOpen] = useState(false);
   const [previewRowIndex, setPreviewRowIndex] = useState(0);
   const [rowSearchQuery, setRowSearchQuery] = useState('');
+  const [stageViewMode, setStageViewMode] = useState('record'); // 'record' | 'tags'
+  const [isFullscreen, setIsFullscreen] = useState(false);
 
   const layoutFileInputRef = useRef(null);
   const dataFileInputRef = useRef(null);
+  const studioWorkspaceRef = useRef(null);
 
-  // Filtered rows for live preview selector search
-  const filteredPreviewRows = rows.filter((r) => {
+  const handleToggleFullscreen = () => {
+    if (!studioWorkspaceRef.current) return;
+    if (!document.fullscreenElement) {
+      studioWorkspaceRef.current.requestFullscreen().then(() => setIsFullscreen(true)).catch((err) => console.error(err));
+    } else {
+      document.exitFullscreen().then(() => setIsFullscreen(false)).catch((err) => console.error(err));
+    }
+  };
+
+  useEffect(() => {
+    const handleFSChange = () => {
+      setIsFullscreen(!!document.fullscreenElement);
+    };
+    document.addEventListener('fullscreenchange', handleFSChange);
+    return () => document.removeEventListener('fullscreenchange', handleFSChange);
+  }, []);
+
+  // Auto-generate random scores (1-100) ensuring top 5 places have unique scores
+  const handleGenerateRandomScores = () => {
+    if (!rows || rows.length === 0) return;
+
+    const topScores = [];
+    while (topScores.length < 5) {
+      const val = Math.floor(Math.random() * 16) + 85; // 85 to 100
+      if (!topScores.includes(val)) {
+        topScores.push(val);
+      }
+    }
+    topScores.sort((a, b) => b - a);
+    const maxOthers = topScores[4] - 1;
+
+    const updated = rows.map((row, idx) => {
+      let scoreVal = 0;
+      if (idx < 5 && idx < topScores.length) {
+        scoreVal = topScores[idx];
+      } else {
+        scoreVal = Math.floor(Math.random() * maxOthers) + 1;
+      }
+      return {
+        ...row,
+        Score: scoreVal
+      };
+    });
+
+    setRows(updated);
+    setScoreColumn('Score');
+  };
+
+  // Filtered rows for stage selector
+  const filteredPreviewRows = tabulatedRows.filter((r) => {
     if (!rowSearchQuery.trim()) return true;
     const q = rowSearchQuery.toLowerCase().trim();
     return Object.values(r).some((val) => String(val).toLowerCase().includes(q));
   });
 
-  // Auto-select first matching record on stage when searching
   React.useEffect(() => {
     if (rowSearchQuery.trim() && filteredPreviewRows.length > 0) {
-      const firstMatchIdx = rows.indexOf(filteredPreviewRows[0]);
+      const firstMatchIdx = tabulatedRows.indexOf(filteredPreviewRows[0]);
       if (firstMatchIdx !== -1 && firstMatchIdx !== previewRowIndex) {
         setPreviewRowIndex(firstMatchIdx);
       }
     }
-  }, [rowSearchQuery, filteredPreviewRows, rows, previewRowIndex]);
+  }, [rowSearchQuery, filteredPreviewRows, tabulatedRows, previewRowIndex]);
 
-  // Notify parent of progress status
   React.useEffect(() => {
     if (onProgressChange) {
       onProgressChange(layouts.length > 0);
@@ -111,13 +219,18 @@ export default function LayoutStudio({ onStartExport, setExportStatus, onProgres
   const currentLayout = layouts.find((l) => l.id === currentLayoutId) || null;
   const selectedField = currentLayout?.fields.find((f) => f.id === selectedFieldId) || null;
   const headers = rows.length > 0 ? Object.keys(rows[0]) : ['first_name', 'middle_name', 'last_name', 'Section', 'Course', 'qr_data'];
+  const activePreviewRow = React.useMemo(() => {
+    const base = tabulatedRows[previewRowIndex] || tabulatedRows[0] || {};
+    return {
+      _titleScheme: titleScheme,
+      _rank_num: previewRowIndex + 1,
+      ...base
+    };
+  }, [tabulatedRows, previewRowIndex, titleScheme]);
 
-  const activePreviewRow = rows[previewRowIndex] || rows[0] || {};
-
-  // Uploading Loading State
   const [isUploading, setIsUploading] = useState(false);
 
-  // Font Upload Handler
+  // Font Upload Handler (Returned to Top of Sidebar)
   const handleCustomFontUpload = async (e) => {
     const files = Array.from(e.target.files || []);
     if (files.length === 0) return;
@@ -135,14 +248,14 @@ export default function LayoutStudio({ onStartExport, setExportStatus, onProgres
     }
   };
 
-  // Multi-Layout Background Files Upload (Non-blocking async micro-chunking)
+  // Multi-Layout Background Files Upload
   const handleLayoutFilesUpload = async (e) => {
     const files = Array.from(e.target.files || []);
     if (files.length === 0) return;
 
     setIsUploading(true);
     const newLayouts = [];
-    const chunkSize = 2; // Process 2 high-res template images per frame tick to keep UI fluid
+    const chunkSize = 2;
 
     for (let i = 0; i < files.length; i += chunkSize) {
       const chunk = files.slice(i, i + chunkSize);
@@ -151,36 +264,36 @@ export default function LayoutStudio({ onStartExport, setExportStatus, onProgres
         chunk.map((file, chunkIdx) => {
           return new Promise((resolve) => {
             const globalIdx = i + chunkIdx;
-            // Instant 0ms object URL allocation
             const dataURL = URL.createObjectURL(file);
             const img = new Image();
             img.onload = () => {
               const baseName = file.name.replace(/\.[^.]+$/, '');
               newLayouts.push({
                 id: `L-${Date.now()}-${globalIdx}`,
-                name: file.name,
+                name: baseName,
                 dataURL,
                 image: img,
                 selectorValue: baseName,
                 fields: [
                   {
                     id: `f-${Date.now()}-${globalIdx}-1`,
+                    name: 'Recipient Citation',
                     type: 'text',
-                    isCustomMessage: false,
-                    customTemplate: 'Awarded to ***{first_name} {middle_name} {last_name}*** for completing {Course}',
-                    isMultiColumn: true,
-                    columns: ['first_name', 'middle_name', 'last_name'],
+                    isCustomMessage: true,
+                    customTemplate: '',
+                    isMultiColumn: false,
+                    columns: ['first_name', 'last_name'],
                     separator: ' ',
                     casing: 'capitalize',
-                    fontSize: 36,
+                    fontSize: 42,
                     isFixedFontSize: false,
                     letterSpacing: 0,
                     wordSpacing: 0,
                     xPct: 0.15,
                     yPct: 0.40,
                     wPct: 0.70,
-                    hPct: 0.15,
-                    fontFamily: 'Georgia, serif',
+                    hPct: 0.18,
+                    fontFamily: customFonts[0]?.family || 'Georgia, serif',
                     fontWeight: '700',
                     color: '#ffffff',
                     align: 'center'
@@ -195,7 +308,6 @@ export default function LayoutStudio({ onStartExport, setExportStatus, onProgres
         })
       );
 
-      // Micro-pause yields execution to browser repaint loop (avoids any frame drop!)
       await new Promise((resolve) => setTimeout(resolve, 16));
     }
 
@@ -209,30 +321,50 @@ export default function LayoutStudio({ onStartExport, setExportStatus, onProgres
     if (layoutFileInputRef.current) layoutFileInputRef.current.value = '';
   };
 
-  const handleAddField = (type) => {
+  const handleAddField = () => {
     if (!currentLayout) return;
-    const count = currentLayout.fields.filter((f) => f.type === type).length;
-    const defaultKey = type === 'text' ? 'first_name' : (count === 0 ? 'qr_data' : `qr_${count + 1}`);
+    const existingFields = currentLayout.fields || [];
+    const count = existingFields.length;
+    const defaultKey = 'first_name';
+
+    // Calculate smart non-overlapping Y position near center/upper stage
+    let newY = 0.35;
+    let newX = 0.25;
+
+    if (existingFields.length > 0) {
+      const maxYField = existingFields.reduce((max, f) => (f.yPct + f.hPct > max.yPct + max.hPct ? f : max), existingFields[0]);
+      const nextYCandidate = maxYField.yPct + (maxYField.hPct || 0.08) + 0.03;
+
+      if (nextYCandidate + 0.08 <= 0.85) {
+        newY = Math.round(nextYCandidate * 100) / 100;
+        newX = maxYField.xPct;
+      } else {
+        const offsetIndex = existingFields.length % 5;
+        newX = Math.round((0.20 + offsetIndex * 0.04) * 100) / 100;
+        newY = Math.round((0.20 + offsetIndex * 0.06) * 100) / 100;
+      }
+    }
 
     const newField = {
       id: `f-${Date.now()}`,
-      type,
-      key: defaultKey,
-      isCustomMessage: false,
-      customTemplate: 'Certificate of Excellence presented to ***{first_name} {last_name}***',
-      isMultiColumn: type === 'text',
-      columns: type === 'text' ? ['first_name', 'last_name'] : [],
+      name: `Text Field ${count + 1}`,
+      type: 'text',
+      key: 'custom_text',
+      isCustomMessage: true,
+      customTemplate: 'Input text here...',
+      isMultiColumn: false,
+      columns: [],
       separator: ' ',
       casing: 'as-is',
-      fontSize: 32,
+      fontSize: 36,
       isFixedFontSize: false,
       letterSpacing: 0,
       wordSpacing: 0,
-      xPct: type === 'text' ? 0.20 : 0.70,
-      yPct: type === 'text' ? 0.45 : 0.65,
-      wPct: type === 'text' ? 0.60 : 0.18,
-      hPct: type === 'text' ? 0.14 : 0.24,
-      fontFamily: 'Georgia, serif',
+      xPct: newX,
+      yPct: newY,
+      wPct: 0.50,
+      hPct: 0.08,
+      fontFamily: customFonts[0]?.family || 'Georgia, serif',
       fontWeight: '600',
       color: '#ffffff',
       align: 'center'
@@ -249,7 +381,53 @@ export default function LayoutStudio({ onStartExport, setExportStatus, onProgres
     setSelectedFieldId(newField.id);
   };
 
+  const saveSnapshot = () => {
+    setHistoryStack((prev) => [...prev.slice(-30), JSON.parse(JSON.stringify(layouts))]);
+    setRedoStack([]);
+  };
+
+  const handleUndo = () => {
+    if (historyStack.length === 0) return;
+    const previous = historyStack[historyStack.length - 1];
+    setRedoStack((prev) => [...prev, JSON.parse(JSON.stringify(layouts))]);
+    setHistoryStack((prev) => prev.slice(0, -1));
+    setLayouts(previous);
+  };
+
+  const handleRedo = () => {
+    if (redoStack.length === 0) return;
+    const next = redoStack[redoStack.length - 1];
+    setHistoryStack((prev) => [...prev, JSON.parse(JSON.stringify(layouts))]);
+    setRedoStack((prev) => prev.slice(0, -1));
+    setLayouts(next);
+  };
+
+  // Keyboard shortcut listener for Ctrl+Z and Ctrl+Y
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      const isInput = ['INPUT', 'TEXTAREA'].includes(document.activeElement?.tagName);
+      if (isInput) return; // Allow default textarea undo/redo while typing inside textarea
+
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
+        if (e.shiftKey) {
+          e.preventDefault();
+          handleRedo();
+        } else {
+          e.preventDefault();
+          handleUndo();
+        }
+      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') {
+        e.preventDefault();
+        handleRedo();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [historyStack, redoStack, layouts]);
+
   const handleUpdateField = (fieldId, updates) => {
+    saveSnapshot();
     setLayouts((prev) =>
       prev.map((l) => {
         if (l.id === currentLayoutId) {
@@ -262,6 +440,7 @@ export default function LayoutStudio({ onStartExport, setExportStatus, onProgres
   };
 
   const handleDeleteField = (fieldId) => {
+    saveSnapshot();
     setLayouts((prev) =>
       prev.map((l) => {
         if (l.id === currentLayoutId) {
@@ -273,104 +452,167 @@ export default function LayoutStudio({ onStartExport, setExportStatus, onProgres
     if (selectedFieldId === fieldId) setSelectedFieldId(null);
   };
 
-  // Toggle Column Selection in Multi-Column Mode
-  const handleToggleColumn = (colKey) => {
-    if (!selectedField) return;
-    const currentCols = selectedField.columns || [];
-    let updated;
-    if (currentCols.includes(colKey)) {
-      updated = currentCols.filter((c) => c !== colKey);
+  // Toggle middle_name tag specifically to middle_name_initial
+  const handleToggleTagInitial = () => {
+    if (!selectedField || selectedField.type !== 'text') return;
+    saveSnapshot();
+    const tpl = selectedField.customTemplate || '';
+
+    let updatedTpl = tpl;
+    if (tpl.toLowerCase().includes('{middle_name_initial}')) {
+      updatedTpl = tpl.replace(/\{middle_name_initial\}/gi, '{middle_name}');
+    } else if (tpl.toLowerCase().includes('{middle_name}')) {
+      updatedTpl = tpl.replace(/\{middle_name\}/gi, '{middle_name_initial}');
     } else {
-      updated = [...currentCols, colKey];
+      const middleMatch = tpl.match(/\{([^}]*middle[^}]*)\}/i);
+      if (middleMatch) {
+        const fullTag = middleMatch[0];
+        const inner = middleMatch[1];
+        if (inner.toLowerCase().endsWith('_initial')) {
+          updatedTpl = tpl.replace(fullTag, `{${inner.slice(0, -8)}}`);
+        } else {
+          updatedTpl = tpl.replace(fullTag, `{${inner}_initial}`);
+        }
+      } else {
+        const needsSpace = tpl.length > 0 && !/\s$/.test(tpl);
+        updatedTpl = tpl + (needsSpace ? ' ' : '') + '{middle_name_initial}';
+      }
     }
-    handleUpdateField(selectedField.id, { columns: updated });
+
+    handleUpdateField(selectedField.id, { customTemplate: updatedTpl });
   };
 
-  // Move Column Up/Down in Multi-Column Mode
-  const handleMoveColumn = (index, direction) => {
-    if (!selectedField || !selectedField.columns) return;
-    const cols = [...selectedField.columns];
-    const targetIdx = direction === 'up' ? index - 1 : index + 1;
-    if (targetIdx < 0 || targetIdx >= cols.length) return;
+  const lastSelectionRef = useRef(null);
 
-    const temp = cols[index];
-    cols[index] = cols[targetIdx];
-    cols[targetIdx] = temp;
-
-    handleUpdateField(selectedField.id, { columns: cols });
-  };
-
-  // Remove a Column from Multi-Column Render Order
-  const handleRemoveColumn = (colToRemove) => {
-    if (!selectedField || !selectedField.columns) return;
-    const updated = selectedField.columns.filter((c) => c !== colToRemove);
-    handleUpdateField(selectedField.id, { columns: updated });
-  };
-
-  // Smart Formatting Wrapper: Wraps highlighted text in textarea with formatting tags (e.g. **selected**)
-  const applyFormattingToSelection = (prefix, suffix) => {
-    if (!selectedField) return;
-    const textarea = templateTextareaRef.current;
-    const currentTpl = selectedField.customTemplate || '';
-
-    if (textarea) {
-      const start = textarea.selectionStart;
-      const end = textarea.selectionEnd;
-
+  const handleCaptureSelection = (e) => {
+    const el = e.target;
+    if (el && (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT')) {
+      const start = el.selectionStart;
+      const end = el.selectionEnd;
       if (start !== undefined && end !== undefined && start !== end) {
-        // Text is highlighted -> Wrap selected text with prefix & suffix!
-        const selectedText = currentTpl.substring(start, end);
-        const newTpl = currentTpl.substring(0, start) + prefix + selectedText + suffix + currentTpl.substring(end);
-        handleUpdateField(selectedField.id, { customTemplate: newTpl });
-
-        setTimeout(() => {
-          textarea.focus();
-          textarea.setSelectionRange(start + prefix.length, end + prefix.length);
-        }, 0);
-        return;
-      } else if (start !== undefined) {
-        // No text highlighted -> Insert formatting block at cursor
-        const newTpl = currentTpl.substring(0, start) + prefix + 'text' + suffix + currentTpl.substring(start);
-        handleUpdateField(selectedField.id, { customTemplate: newTpl });
-
-        setTimeout(() => {
-          textarea.focus();
-          textarea.setSelectionRange(start + prefix.length, start + prefix.length + 4);
-        }, 0);
-        return;
+        const text = el.value.slice(start, end).trim();
+        if (text) {
+          lastSelectionRef.current = { text, fieldId: selectedField?.id };
+        }
       }
     }
-
-    // Fallback
-    handleUpdateField(selectedField.id, { customTemplate: currentTpl + prefix + 'text' + suffix });
   };
 
-  // Insert Variable Placeholder at Current Cursor / Replace Selection
-  const insertVariableAtCursor = (varTag) => {
+  // Toggle style (Bold, Italic, Strikethrough, Underline) on field properties, highlighted text range, or customTemplate tags
+  const handleApplyInlineStyle = (styleType) => {
+    if (!selectedField || selectedField.type !== 'text') return;
+    saveSnapshot();
+
+    const activeEl = document.activeElement;
+    let targetKey = selectedField.selectedTag;
+
+    if (activeEl && (activeEl.tagName === 'TEXTAREA' || activeEl.tagName === 'INPUT') && activeEl.selectionStart !== activeEl.selectionEnd) {
+      const start = activeEl.selectionStart;
+      const end = activeEl.selectionEnd;
+      targetKey = activeEl.value.slice(start, end).trim();
+    } else if (lastSelectionRef.current && lastSelectionRef.current.fieldId === selectedField.id && lastSelectionRef.current.text) {
+      targetKey = lastSelectionRef.current.text;
+    }
+
+    const currentStyledTags = selectedField.styledTags || {};
+    const fieldIsBold = selectedField.fontWeight === '700' || selectedField.fontWeight === 'bold';
+    const fieldIsItalic = selectedField.fontStyle === 'italic';
+    const fieldIsStrike = Boolean(selectedField.strikethrough);
+    const fieldIsUnderline = Boolean(selectedField.underline);
+
+    if (targetKey) {
+      // Toggle style on the specific selected tag or highlighted phrase ONLY
+      const existingTagStyle = currentStyledTags[targetKey] || {};
+
+      let fieldIsActive = false;
+      if (styleType === 'bold') fieldIsActive = fieldIsBold;
+      else if (styleType === 'italic') fieldIsActive = fieldIsItalic;
+      else if (styleType === 'strikethrough') fieldIsActive = fieldIsStrike;
+      else if (styleType === 'underline') fieldIsActive = fieldIsUnderline;
+
+      const currentVal = existingTagStyle[styleType] !== undefined ? existingTagStyle[styleType] : fieldIsActive;
+
+      const newTagStyle = {
+        ...existingTagStyle,
+        [styleType]: !currentVal
+      };
+
+      handleUpdateField(selectedField.id, {
+        selectedTag: targetKey,
+        styledTags: {
+          ...currentStyledTags,
+          [targetKey]: newTagStyle
+        }
+      });
+      lastSelectionRef.current = null;
+    } else {
+      // Toggle style on the WHOLE field & clear tag-specific overrides for this styleType
+      const updatedStyledTags = { ...currentStyledTags };
+      Object.keys(updatedStyledTags).forEach((tagKey) => {
+        if (updatedStyledTags[tagKey]) {
+          const { [styleType]: _removed, ...rest } = updatedStyledTags[tagKey];
+          updatedStyledTags[tagKey] = rest;
+        }
+      });
+
+      const updates = { styledTags: updatedStyledTags };
+      if (styleType === 'bold') updates.fontWeight = fieldIsBold ? '400' : '700';
+      else if (styleType === 'italic') updates.fontStyle = fieldIsItalic ? 'normal' : 'italic';
+      else if (styleType === 'strikethrough') updates.strikethrough = !fieldIsStrike;
+      else if (styleType === 'underline') updates.underline = !fieldIsUnderline;
+
+      handleUpdateField(selectedField.id, updates);
+    }
+  };
+
+  const handleColorChange = (newColor) => {
     if (!selectedField) return;
-    const textarea = templateTextareaRef.current;
-    const currentTpl = selectedField.customTemplate || '';
 
-    if (textarea) {
-      const start = textarea.selectionStart;
-      const end = textarea.selectionEnd;
+    const activeTagKey = selectedField.selectedTag;
+    const currentStyledTags = selectedField.styledTags || {};
 
-      if (start !== undefined && end !== undefined) {
-        const newTpl = currentTpl.substring(0, start) + varTag + currentTpl.substring(end);
-        handleUpdateField(selectedField.id, { customTemplate: newTpl });
+    if (activeTagKey) {
+      // A specific tag or word range is selected: update color ONLY for this tag/word
+      const tagStyle = currentStyledTags[activeTagKey] || {};
+      handleUpdateField(selectedField.id, {
+        styledTags: {
+          ...currentStyledTags,
+          [activeTagKey]: { ...tagStyle, color: newColor }
+        }
+      });
+    } else {
+      // NO specific text selected: change color for EVERYTHING in the text box!
+      // Also clear tag-specific color overrides so all tags inherit the new base color
+      const updatedStyledTags = { ...currentStyledTags };
+      Object.keys(updatedStyledTags).forEach((tagKey) => {
+        if (updatedStyledTags[tagKey]) {
+          const { color: _removed, ...rest } = updatedStyledTags[tagKey];
+          updatedStyledTags[tagKey] = rest;
+        }
+      });
 
-        setTimeout(() => {
-          textarea.focus();
-          textarea.setSelectionRange(start + varTag.length, start + varTag.length);
-        }, 0);
-        return;
-      }
+      handleUpdateField(selectedField.id, {
+        color: newColor,
+        styledTags: updatedStyledTags
+      });
     }
-
-    handleUpdateField(selectedField.id, { customTemplate: currentTpl + varTag });
   };
 
-  // Batch CSV / Excel Upload Handler
+  const insertVariableAtCursor = (varTag, separator = ' ') => {
+    if (!selectedField) return;
+    const currentTpl = selectedField.customTemplate || '';
+    const needsSepBefore = currentTpl.length > 0 && !/\s$/.test(currentTpl);
+    const formattedTag = (needsSepBefore ? separator : '') + varTag + separator;
+    handleUpdateField(selectedField.id, { customTemplate: currentTpl + formattedTag });
+  };
+
+  const applyFormatting = (prefix, suffix) => {
+    if (!selectedField) return;
+    const currentTpl = selectedField.customTemplate || '';
+    handleUpdateField(selectedField.id, { customTemplate: prefix + currentTpl + suffix });
+  };
+
+  // CSV Data Upload
   const handleDataFileUpload = (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -400,40 +642,19 @@ export default function LayoutStudio({ onStartExport, setExportStatus, onProgres
         setPreviewRowIndex(0);
         setDataFileName(`${file.name} (${parsed.length} rows)`);
 
-        // Automatically reset/validate layout field column picks to match new CSV headers
-        if (parsed.length > 0) {
-          const newHeaders = Object.keys(parsed[0]);
-          setLayouts((prevLayouts) =>
-            prevLayouts.map((l) => ({
-              ...l,
-              fields: l.fields.map((f) => {
-                if (f.type === 'text') {
-                  const validCols = (f.columns || []).filter((c) => newHeaders.includes(c));
-                  const newCols = validCols.length > 0 ? validCols : newHeaders.slice(0, Math.min(3, newHeaders.length));
-                  const newKey = newHeaders.includes(f.key) ? f.key : newHeaders[0];
-                  return { ...f, columns: newCols, key: newKey };
-                } else if (f.type === 'qr') {
-                  const qrMatch = newHeaders.find((h) => /qr|code|url|id/i.test(h)) || newHeaders[0];
-                  const newKey = newHeaders.includes(f.key) ? f.key : qrMatch;
-                  return { ...f, key: newKey };
-                }
-                return f;
-              })
-            }))
-          );
+        const scoresFound = detectScoreColumns(parsed);
+        if (scoresFound.length > 0 && !scoreColumn) {
+          setScoreColumn(scoresFound[0]);
         }
       } catch (err) {
-        alert('File parsing error: ' + err.message);
+        alert('File error: ' + err.message);
       } finally {
         setIsUploading(false);
       }
     };
 
-    if (isCSV) {
-      reader.readAsText(file);
-    } else {
-      reader.readAsArrayBuffer(file);
-    }
+    if (isCSV) reader.readAsText(file);
+    else reader.readAsArrayBuffer(file);
 
     dataFileInputRef.current.value = '';
   };
@@ -450,268 +671,154 @@ export default function LayoutStudio({ onStartExport, setExportStatus, onProgres
     });
   };
 
-  // Export Single Preview PNG
   const handleDownloadSinglePreview = async () => {
     if (!currentLayout) return;
     const tempCanvas = document.createElement('canvas');
-    await renderRecordToCanvas(activePreviewRow, currentLayout, tempCanvas);
+    await renderRecordToCanvas(activePreviewRow, currentLayout, tempCanvas, 880, exportResolution);
 
     const link = document.createElement('a');
-    link.download = `preview_${currentLayout.name}.png`;
+    link.download = `certificate-${currentLayout.name || 'preview'}.png`;
     link.href = tempCanvas.toDataURL('image/png');
     link.click();
+    tempCanvas.width = 0;
+    tempCanvas.height = 0;
   };
 
-  const cancelExportRef = useRef(false);
+  // Auto-detect hierarchy columns (Program, Year, Section, Course, etc.) when rows load
+  useEffect(() => {
+    if (rows && rows.length > 0) {
+      const sampleKeys = Object.keys(rows[0]).filter((k) => !k.startsWith('_'));
+      const matched = sampleKeys.filter((k) => {
+        const lower = k.toLowerCase().trim();
+        return (
+          lower.includes('program') ||
+          lower.includes('course') ||
+          lower.includes('year') ||
+          lower.includes('section') ||
+          lower.includes('grade') ||
+          lower.includes('class') ||
+          lower.includes('dept')
+        );
+      });
+      if (matched.length > 0 && exportHierarchyColumns.length === 0) {
+        setExportHierarchyColumns(matched);
+      }
+    }
+  }, [rows]);
 
   const handleInitiateBatchZip = () => {
-    if (layouts.length === 0 || rows.length === 0) return;
-    const selectedCount = selectedRowIndices.size > 0 ? selectedRowIndices.size : rows.length;
-
-    // Prompt for Large Batches (>100 items) if Safe Memory Mode is not enabled
-    if (selectedCount >= 100 && !safeMemoryMode) {
-      setIsLargeBatchModalOpen(true);
+    if (layouts.length === 0 || tabulatedRows.length === 0 || selectedRowIndices.size === 0) {
+      alert('Please select records to export.');
       return;
     }
-    handleGenerateBatchZip();
+    setIsExportSettingsModalOpen(true);
   };
 
-  // Export Batch ZIP for Selected Rows
-  const handleGenerateBatchZip = async () => {
-    if (layouts.length === 0 || rows.length === 0) return;
+  const executeBatchZipExport = async () => {
+    if (layouts.length === 0 || tabulatedRows.length === 0 || selectedRowIndices.size === 0) return;
 
-    const selectedRowsToExport = rows.filter((_, idx) => selectedRowIndices.has(idx));
-    if (selectedRowsToExport.length === 0) {
-      alert('Please select at least 1 record to generate!');
-      return;
-    }
+    let selectedRowsToExport = tabulatedRows.filter((_, idx) => selectedRowIndices.has(idx));
 
-    cancelExportRef.current = false;
-    if (onRegisterCancel) {
-      onRegisterCancel(() => {
-        cancelExportRef.current = true;
-        const resetStatus = { isExporting: false, isFinished: false, progress: 0, total: 0 };
-        setLocalExportStatus(resetStatus);
-        if (setExportStatus) setExportStatus(resetStatus);
+    // Sort by hierarchy columns if enabled
+    if (exportSortByHierarchy && exportHierarchyColumns.length > 0) {
+      selectedRowsToExport = [...selectedRowsToExport].sort((a, b) => {
+        for (const col of exportHierarchyColumns) {
+          const valA = String(a[col] || '').trim().toLowerCase();
+          const valB = String(b[col] || '').trim().toLowerCase();
+          if (valA !== valB) return valA.localeCompare(valB, undefined, { numeric: true });
+        }
+        return 0;
       });
     }
 
-    if (onStartExport) onStartExport();
-    const initialStatus = { isExporting: true, isFinished: false, progress: 0, total: selectedRowsToExport.length };
+    let shouldCancel = false;
+    const cancelTrigger = () => { shouldCancel = true; };
+    if (onRegisterCancel) onRegisterCancel(cancelTrigger);
+
+    const totalVolumesCount = Math.ceil(selectedRowsToExport.length / exportBatchChunkSize);
+
+    const initialStatus = {
+      isExporting: true,
+      isFinished: false,
+      progress: 0,
+      total: selectedRowsToExport.length,
+      currentVolume: 1,
+      totalVolumes: totalVolumesCount,
+      zipPercent: 0,
+      phase: 'rendering',
+      currentFile: ''
+    };
     setLocalExportStatus(initialStatus);
     if (setExportStatus) setExportStatus(initialStatus);
+    if (onStartExport) onStartExport();
 
-    await exportLayoutsToZip({
-      rows: selectedRowsToExport,
-      layouts,
-      layoutColumnKey,
-      folderSortColumns,
-      folderStructureMode,
-      maxDimension: exportResolution,
-      safeMemoryMode,
-      batchChunkSize: 500, // 500 items per ZIP volume to guarantee low RAM usage
-      onProgress: (current, total, volInfo) => {
-        const curStatus = {
-          isExporting: true,
-          isFinished: false,
-          progress: current,
-          total,
-          phase: 'rendering',
-          zipPercent: 0,
-          currentVolume: volInfo?.currentVolume || 1,
-          totalVolumes: volInfo?.totalVolumes || 1
-        };
-        setLocalExportStatus(curStatus);
-        if (setExportStatus) setExportStatus(curStatus);
-      },
-      onZipProgress: (percent, currentFile, volInfo) => {
-        const packedCount = volInfo?.volEnd || selectedRowsToExport.length;
-        const packingStatus = {
-          isExporting: true,
-          isFinished: false,
-          progress: packedCount,
-          total: selectedRowsToExport.length,
-          phase: 'packing',
-          zipPercent: percent,
-          currentZipFile: currentFile,
-          currentVolume: volInfo?.currentVolume || 1,
-          totalVolumes: volInfo?.totalVolumes || 1
-        };
-        setLocalExportStatus(packingStatus);
-        if (setExportStatus) setExportStatus(packingStatus);
-      },
-      shouldCancel: () => cancelExportRef.current
-    });
-
-    if (cancelExportRef.current) {
-      const cancelledStatus = { isExporting: false, isFinished: false, progress: 0, total: 0 };
-      setLocalExportStatus(cancelledStatus);
-      if (setExportStatus) setExportStatus(cancelledStatus);
-      return;
-    }
-
-    const finalStatus = {
-      isExporting: false,
-      isFinished: true,
-      progress: selectedRowsToExport.length,
-      total: selectedRowsToExport.length,
-      phase: 'complete'
-    };
-    setLocalExportStatus(finalStatus);
-    if (setExportStatus) setExportStatus(finalStatus);
-  };
-
-  // Keyboard Shortcuts for LayoutStudio
-  React.useEffect(() => {
-    const handleKeyDown = (e) => {
-      const target = e.target;
-      const isInputFocused =
-        ['INPUT', 'TEXTAREA', 'SELECT'].includes(target?.tagName) ||
-        target?.isContentEditable;
-
-      if (isInputFocused) return;
-
-      // Duplicate Selected Box (Ctrl + D / Cmd + D)
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'd') {
-        e.preventDefault();
-        if (selectedFieldId && currentLayout) {
-          const fieldToDup = currentLayout.fields.find((f) => f.id === selectedFieldId);
-          if (fieldToDup) {
-            const newField = {
-              ...fieldToDup,
-              id: `f-${Date.now()}`,
-              xPct: Math.min(0.8, fieldToDup.xPct + 0.04),
-              yPct: Math.min(0.8, fieldToDup.yPct + 0.04)
-            };
-            setLayouts((prev) =>
-              prev.map((l) => (l.id === currentLayoutId ? { ...l, fields: [...l.fields, newField] } : l))
-            );
-            setSelectedFieldId(newField.id);
-          }
+    try {
+      await exportLayoutsToZip({
+        layouts,
+        rows: selectedRowsToExport,
+        layoutColumnKey: 'name',
+        folderSortColumns: exportHierarchyColumns,
+        folderStructureMode: exportFolderMode,
+        safeMemoryMode: exportSafeMemoryMode,
+        batchChunkSize: exportBatchChunkSize,
+        exportFormat,
+        exportQuality,
+        maxDimension: exportResolution,
+        shouldCancel: () => shouldCancel,
+        onProgress: (current, total, meta) => {
+          const updatedStatus = {
+            isExporting: true,
+            isFinished: false,
+            progress: current || 0,
+            total: total || selectedRowsToExport.length,
+            currentVolume: meta?.currentVolume || 1,
+            totalVolumes: meta?.totalVolumes || totalVolumesCount,
+            zipPercent: 0,
+            phase: 'rendering',
+            currentFile: ''
+          };
+          setLocalExportStatus(updatedStatus);
+          if (setExportStatus) setExportStatus(updatedStatus);
+        },
+        onZipProgress: (zipPercent, currentFile, meta) => {
+          const updatedStatus = {
+            isExporting: true,
+            isFinished: false,
+            progress: selectedRowsToExport.length,
+            total: selectedRowsToExport.length,
+            currentVolume: meta?.currentVolume || 1,
+            totalVolumes: meta?.totalVolumes || totalVolumesCount,
+            zipPercent: zipPercent || 0,
+            phase: 'zipping',
+            currentFile: currentFile || ''
+          };
+          setLocalExportStatus(updatedStatus);
+          if (setExportStatus) setExportStatus(updatedStatus);
         }
-        return;
+      });
+    } catch (err) {
+      if (err.message !== 'EXPORT_CANCELLED') {
+        alert('ZIP Export Failed: ' + err.message);
       }
-
-      // Delete Selected Box (Delete / Backspace)
-      if (e.key === 'Delete' || e.key === 'Backspace') {
-        if (selectedFieldId) {
-          e.preventDefault();
-          handleDeleteField(selectedFieldId);
-        }
-        return;
-      }
-
-      // Deselect Field (Enter / Escape)
-      if ((e.key === 'Enter' && !e.ctrlKey && !e.metaKey) || e.key === 'Escape') {
-        if (selectedFieldId) {
-          e.preventDefault();
-          setSelectedFieldId(null);
-        }
-        return;
-      }
-
-      // Trigger Batch ZIP Export (Ctrl + Enter / Cmd + Enter)
-      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-        e.preventDefault();
-        handleGenerateBatchZip();
-        return;
-      }
-
-      // Arrow Key Nudging for Selected Box
-      if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
-        if (selectedFieldId && selectedField) {
-          e.preventDefault();
-          const step = e.shiftKey ? 0.05 : 0.01;
-          let dx = 0;
-          let dy = 0;
-          if (e.key === 'ArrowLeft') dx = -step;
-          if (e.key === 'ArrowRight') dx = step;
-          if (e.key === 'ArrowUp') dy = -step;
-          if (e.key === 'ArrowDown') dy = step;
-
-          const newX = Math.max(0, Math.min(1 - selectedField.wPct, selectedField.xPct + dx));
-          const newY = Math.max(0, Math.min(1 - selectedField.hPct, selectedField.yPct + dy));
-          handleUpdateField(selectedField.id, { xPct: newX, yPct: newY });
-          return;
-        }
-
-        // Record switcher when no field selected
-        if (!selectedFieldId && rows.length > 0) {
-          if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
-            e.preventDefault();
-            setPreviewRowIndex((prev) => (prev > 0 ? prev - 1 : rows.length - 1));
-          } else if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
-            e.preventDefault();
-            setPreviewRowIndex((prev) => (prev < rows.length - 1 ? prev + 1 : 0));
-          }
-        }
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedFieldId, currentLayout, selectedField, rows, currentLayoutId]);
-
-  // Drag and drop target for LayoutStudio
-  const [isDragOverStudio, setIsDragOverStudio] = useState(false);
-
-  const handleStudioDragOver = (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    if (!isDragOverStudio) setIsDragOverStudio(true);
-  };
-
-  const handleStudioDragLeave = (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    if (e.currentTarget.contains(e.relatedTarget)) return;
-    setIsDragOverStudio(false);
-  };
-
-  const handleStudioDrop = (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setIsDragOverStudio(false);
-
-    const files = Array.from(e.dataTransfer.files || []);
-    if (files.length === 0) return;
-
-    const csvOrExcel = files.find((f) => /\.(csv|xlsx|xls)$/i.test(f.name));
-    const fontFiles = files.filter((f) => /\.(ttf|otf|woff|woff2)$/i.test(f.name));
-    const imageFiles = files.filter((f) => /\.(png|jpg|jpeg|webp|gif|svg|bmp)$/i.test(f.name));
-
-    if (csvOrExcel) {
-      handleDataFileUpload({ target: { files: [csvOrExcel] } });
-    }
-    if (fontFiles.length > 0) {
-      handleCustomFontUpload({ target: { files: fontFiles } });
-    }
-    if (imageFiles.length > 0) {
-      handleLayoutFilesUpload({ target: { files: imageFiles } });
+    } finally {
+      const resetStatus = {
+        isExporting: false,
+        isFinished: false,
+        progress: 0,
+        total: 0,
+        currentVolume: 1,
+        totalVolumes: 1,
+        zipPercent: 0,
+        phase: 'idle',
+        currentFile: ''
+      };
+      setLocalExportStatus(resetStatus);
+      if (setExportStatus) setExportStatus(resetStatus);
     }
   };
 
   return (
-    <div
-      onDragOver={handleStudioDragOver}
-      onDragLeave={handleStudioDragLeave}
-      onDrop={handleStudioDrop}
-      className={`space-y-6 animate-fade-in relative transition-all duration-200 rounded-3xl ${
-        isDragOverStudio ? 'ring-4 ring-amber-400/60 bg-amber-500/5' : ''
-      }`}
-    >
-      {/* Drag & Drop Visual Overlay */}
-      {isDragOverStudio && (
-        <div className="absolute inset-0 z-50 bg-slate-950/80 backdrop-blur-sm rounded-3xl border-2 border-dashed border-amber-400 flex flex-col items-center justify-center gap-3 p-8 animate-fade-in pointer-events-none">
-          <div className="w-16 h-16 rounded-2xl bg-amber-500/20 text-amber-400 flex items-center justify-center border border-amber-500/40 animate-bounce">
-            <Layout className="w-8 h-8" />
-          </div>
-          <h3 className="text-xl font-bold text-amber-300">Drop Files to Load into Certificate Studio</h3>
-          <p className="text-xs text-slate-300 text-center max-w-md">
-            Drop <strong className="text-white">Images</strong> for Layout Backgrounds, <strong className="text-white">CSV/Excel</strong> for recipient data, or <strong className="text-white">Fonts (.ttf/.otf)</strong>.
-          </p>
-        </div>
-      )}
+    <div className="space-y-4 animate-fade-in relative">
       {/* CSV Data Table Editor Modal */}
       <CSVDataEditorModal
         isOpen={isDataEditorOpen}
@@ -728,35 +835,260 @@ export default function LayoutStudio({ onStartExport, setExportStatus, onProgres
         onDeselectAll={handleDeselectAllRows}
       />
 
-      {/* Clean Header */}
-      <div className="glass-panel p-4 flex items-center justify-between border-amber-500/30">
-        <div className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-xl bg-amber-500/20 text-amber-500 flex items-center justify-center border border-amber-500/40">
-            <Layout className="w-5 h-5" />
+      {/* EXPORT SETTINGS & HIERARCHY MODAL */}
+      {isExportSettingsModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-fade-in">
+          <div className="bg-slate-900 border border-amber-500/40 w-full max-w-2xl rounded-3xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+            
+            {/* Modal Header */}
+            <div className="px-6 py-4 border-b border-slate-800 bg-slate-950/60 flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-2xl bg-amber-500/20 text-amber-400 border border-amber-500/30 flex items-center justify-center">
+                  <Download className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-base text-white">Batch Export Settings</h3>
+                  <p className="text-xs text-slate-400">Configure resolution, batch chunking, and folder hierarchy before downloading.</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setIsExportSettingsModalOpen(false)}
+                className="text-slate-400 hover:text-white p-1 rounded-lg transition-colors font-bold text-base"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Modal Content / Form Options */}
+            <div className="p-6 overflow-y-auto space-y-5 flex-1">
+              
+              {/* SECTION 1: QUALITY & RESOLUTION */}
+              <div className="glass-panel p-4 space-y-3 border-slate-800">
+                <h4 className="text-xs font-bold text-amber-300 uppercase tracking-wider flex items-center gap-1.5">
+                  <Sparkles className="w-4 h-4 text-amber-400" /> Quality & Canvas Resolution Settings
+                </h4>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-xs font-medium text-slate-300 block mb-1">Export File Format:</label>
+                    <select
+                      value={exportFormat}
+                      onChange={(e) => setExportFormat(e.target.value)}
+                      className="select-dark text-xs w-full py-1.5 font-mono"
+                    >
+                      <option value="png">PNG (High Definition / Lossless)</option>
+                      <option value="jpeg">JPEG (Compressed / Smaller Zip)</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="text-xs font-medium text-slate-300 block mb-1">Canvas Resolution Scale:</label>
+                    <select
+                      value={exportResolution}
+                      onChange={(e) => setExportResolution(Number(e.target.value))}
+                      className="select-dark text-xs w-full py-1.5 font-mono"
+                    >
+                      <option value={2560}>🌟 2560px Max (Ultra HD / Print Quality)</option>
+                      <option value={1920}>⚡ 1920px Max (Standard HD / Fast)</option>
+                      <option value={1280}>🛡️ 1280px Max (Compact / Mobile Safe)</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+
+              {/* SECTION 2: BATCH CHUNKING (PER 100 RECORDS) */}
+              <div className="glass-panel p-4 space-y-3 border-indigo-500/30">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-xs font-bold text-indigo-300 uppercase tracking-wider flex items-center gap-1.5">
+                    <Layers className="w-4 h-4 text-indigo-400" /> Batch Chunking (ZIP Volumes)
+                  </h4>
+                  <span className="text-[11px] font-mono text-amber-300 font-bold bg-amber-500/10 px-2.5 py-0.5 rounded border border-amber-500/20">
+                    {Math.ceil(selectedRowIndices.size / exportBatchChunkSize)} ZIP Volume(s)
+                  </span>
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-slate-300 block mb-1">Items Per ZIP Volume:</label>
+                  <select
+                    value={exportBatchChunkSize}
+                    onChange={(e) => setExportBatchChunkSize(Number(e.target.value))}
+                    className="select-dark text-xs w-full py-1.5 font-mono"
+                  >
+                    <option value={100}>100 Items Per ZIP (Default / Balanced RAM)</option>
+                    <option value={50}>50 Items Per ZIP (High Reliability for Low RAM)</option>
+                    <option value={200}>200 Items Per ZIP (Faster Single Download)</option>
+                    <option value={500}>500 Items Per ZIP (Large Single ZIP Volume)</option>
+                  </select>
+                  <p className="text-[11px] text-slate-400 mt-1.5">
+                    Splitting generation into chunks of {exportBatchChunkSize} records prevents browser tab memory freezes and allows continuous background downloads.
+                  </p>
+                </div>
+              </div>
+
+              {/* SECTION 3: HIERARCHICAL FOLDER SORTING ({program} {year} {section}) */}
+              <div className="glass-panel p-4 space-y-3.5 border-emerald-500/30">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-xs font-bold text-emerald-300 uppercase tracking-wider flex items-center gap-1.5">
+                    <FolderTree className="w-4 h-4 text-emerald-400" /> Hierarchical Folder Organization
+                  </h4>
+                </div>
+
+                <p className="text-xs text-slate-300">
+                  Select CSV columns to organize exported certificates into sub-folders based on hierarchy (e.g., <span className="text-amber-300 font-mono font-bold">Program</span>, <span className="text-amber-300 font-mono font-bold">Year</span>, and <span className="text-amber-300 font-mono font-bold">Section</span>):
+                </p>
+
+                {/* Column Header Selection Pills */}
+                <div className="flex flex-wrap gap-1.5 max-h-32 overflow-y-auto p-2 bg-slate-950/80 rounded-xl border border-slate-800">
+                  {headers.filter(h => !h.startsWith('_')).map((col) => {
+                    const isSelected = exportHierarchyColumns.includes(col);
+                    return (
+                      <button
+                        key={col}
+                        onClick={() => {
+                          if (isSelected) {
+                            setExportHierarchyColumns(exportHierarchyColumns.filter(c => c !== col));
+                          } else {
+                            setExportHierarchyColumns([...exportHierarchyColumns, col]);
+                          }
+                        }}
+                        className={`px-2.5 py-1 rounded-lg text-xs font-mono font-bold transition flex items-center gap-1 border ${
+                          isSelected
+                            ? 'bg-emerald-500 text-slate-950 border-emerald-400 shadow-sm'
+                            : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-white'
+                        }`}
+                      >
+                        {isSelected ? '✓ ' : '+ '} {col}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {/* Hierarchy Folder Path Preview */}
+                {exportHierarchyColumns.length > 0 && (
+                  <div className="p-3 bg-slate-950 rounded-xl border border-emerald-500/30 text-xs space-y-1.5">
+                    <span className="text-slate-400 font-mono text-[10px] uppercase font-bold block">Target Folder Path:</span>
+                    <div className="flex items-center gap-2 font-mono text-emerald-300 font-bold">
+                      <FolderPlus className="w-4 h-4 text-emerald-400 flex-shrink-0" />
+                      <span>
+                        {exportFolderMode === 'combined'
+                          ? `{ ${exportHierarchyColumns.join(' ')} } / Certificate.png`
+                          : `${exportHierarchyColumns.join(' / ')} / Certificate.png`}
+                      </span>
+                    </div>
+                  </div>
+                )}
+
+                {/* Hierarchy Sort & Mode Toggles */}
+                <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 pt-1 border-t border-slate-800">
+                  <label className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={exportSortByHierarchy}
+                      onChange={(e) => setExportSortByHierarchy(e.target.checked)}
+                      className="rounded bg-slate-950 border-slate-700 text-amber-500 focus:ring-0"
+                    />
+                    <span>Sort records by Hierarchy before export</span>
+                  </label>
+
+                  <div className="flex items-center gap-2 text-xs">
+                    <span className="text-slate-400">Folder Style:</span>
+                    <select
+                      value={exportFolderMode}
+                      onChange={(e) => setExportFolderMode(e.target.value)}
+                      className="select-dark text-xs py-0.5 px-2 font-mono"
+                    >
+                      <option value="combined">Combined Folder Name ({exportHierarchyColumns.join(' ') || 'Program Year Sec'})</option>
+                      <option value="nested">Nested Subfolders (Program / Year / Section)</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+
+            </div>
+
+            {/* Modal Actions */}
+            <div className="px-6 py-4 border-t border-slate-800 bg-slate-950/80 flex items-center justify-end gap-3">
+              <button
+                onClick={() => setIsExportSettingsModalOpen(false)}
+                className="btn-secondary text-xs py-2 px-4 font-bold"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  setIsExportSettingsModalOpen(false);
+                  executeBatchZipExport();
+                }}
+                className="btn-gold text-xs py-2 px-5 font-bold shadow-lg shadow-amber-500/20 flex items-center gap-2"
+              >
+                <Download className="w-4 h-4 text-slate-950" />
+                <span>Start Batch Export ({selectedRowIndices.size} Records)</span>
+              </button>
+            </div>
+
           </div>
-          <h2 className="text-2xl font-black tracking-tight">Certificate</h2>
+        </div>
+      )}
+
+      {/* Clean Top Header Bar */}
+      <div className="glass-panel p-3.5 flex items-center justify-between border-amber-500/30">
+        <div className="flex items-center gap-3">
+          <div className="w-8 h-8 rounded-xl bg-amber-500/20 text-amber-500 flex items-center justify-center border border-amber-500/40">
+            <Layout className="w-4 h-4" />
+          </div>
+          <div>
+            <h2 className="text-lg font-black tracking-tight text-white flex items-center gap-2">
+              <span>Certificate Studio</span>
+              {scoreColumn && (
+                <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30 flex items-center gap-1">
+                  <Trophy className="w-3 h-3 text-amber-400" /> Sorted by {scoreColumn}
+                </span>
+              )}
+            </h2>
+          </div>
         </div>
 
-        {/* Edit CSV Button in Header - Only available when dataset is uploaded */}
-        {rows.length > 0 && (
+        {/* Top Header Actions */}
+        <div className="flex items-center gap-2">
+          {rows.length > 0 && (
+            <button
+              onClick={() => setIsDataEditorOpen(true)}
+              className="btn-secondary text-xs py-1.5 px-3 flex items-center gap-1.5"
+            >
+              <Table className="w-4 h-4 text-indigo-400" /> Data Table ({rows.length})
+            </button>
+          )}
           <button
-            onClick={() => setIsDataEditorOpen(true)}
-            className="btn-secondary text-xs py-1.5 px-3 flex items-center gap-1.5"
+            onClick={handleInitiateBatchZip}
+            disabled={layouts.length === 0 || tabulatedRows.length === 0 || selectedRowIndices.size === 0 || localExportStatus.isExporting}
+            className="btn-gold text-xs py-1.5 px-4 font-bold shadow-md shadow-amber-500/20 flex items-center gap-1.5 disabled:opacity-40"
           >
-            <Table className="w-4 h-4 text-indigo-500" /> View & Edit CSV Data ({rows.length})
+            {localExportStatus.isExporting ? (
+              <>
+                <Loader2 className="w-4 h-4 animate-spin text-slate-950" />
+                <span>Generating ({localExportStatus.progress}/{localExportStatus.total})...</span>
+              </>
+            ) : (
+              <>
+                <Download className="w-4 h-4 text-slate-950" />
+                <span>Export ZIP ({selectedRowIndices.size})</span>
+              </>
+            )}
           </button>
-        )}
+        </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        {/* LEFT PANEL: Layout Templates & Field Manager */}
-        <div className="lg:col-span-3 md:col-span-4 space-y-4">
-          {/* Custom Font Upload */}
-          <div className="glass-panel p-4 space-y-3">
-            <h3 className="font-bold text-xs uppercase tracking-wider flex items-center justify-between opacity-80">
-              <span>Custom Fonts</span>
-              <span className="text-[10px] text-amber-500 font-mono">{customFonts.length} uploaded</span>
-            </h3>
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
+        
+        {/* LEFT SIDEBAR PANEL: Custom Fonts (Top), Layout Cards & Layers */}
+        <div className="lg:col-span-3 space-y-3.5">
+          
+          {/* 1. CUSTOM FONTS SECTION (PROMINENTLY AT THE TOP) */}
+          <div className="glass-panel p-3.5 space-y-2.5 border-indigo-500/30">
+            <div className="flex items-center justify-between">
+              <h3 className="font-bold text-xs text-indigo-300 uppercase tracking-wider flex items-center gap-1.5">
+                <FolderPlus className="w-3.5 h-3.5 text-indigo-400" /> Custom Fonts
+              </h3>
+              <span className="text-[10px] text-amber-400 font-mono font-bold">{customFonts.length} Loaded</span>
+            </div>
 
             <input
               type="file"
@@ -769,34 +1101,43 @@ export default function LayoutStudio({ onStartExport, setExportStatus, onProgres
 
             <button
               onClick={() => fontFileInputRef.current?.click()}
-              className="btn-secondary text-xs w-full justify-center"
+              className="btn-secondary text-xs w-full justify-center py-2 border-indigo-500/40 text-indigo-300 font-bold hover:bg-indigo-500/10 flex items-center gap-1.5"
             >
-              <FolderPlus className="w-4 h-4 text-indigo-500" /> Upload Font (.ttf, .otf, .woff)
+              <Plus className="w-3.5 h-3.5 text-indigo-400" /> Upload Font File (.ttf / .otf)
             </button>
+
+            {customFonts.length > 0 && (
+              <div className="flex flex-wrap gap-1 pt-1 max-h-24 overflow-auto">
+                {customFonts.map((cf) => (
+                  <span key={cf.name} className="px-2 py-0.5 rounded-md bg-slate-900 text-indigo-300 border border-slate-800 text-[10px] font-mono">
+                    {cf.displayName}
+                  </span>
+                ))}
+              </div>
+            )}
           </div>
 
-          {/* Layout Backgrounds Section */}
-          <div className="glass-panel p-4 space-y-3">
-            <h3 className="font-bold text-xs text-slate-300 uppercase tracking-wider">Layout Templates ({layouts.length})</h3>
+          {/* 2. LAYOUT TEMPLATE IMAGES WITH INLINE RENAMING */}
+          <div className="glass-panel p-3.5 space-y-2.5">
+            <div className="flex items-center justify-between">
+              <h3 className="font-bold text-xs text-slate-200 uppercase tracking-wider">Layout Images ({layouts.length})</h3>
+              <input
+                type="file"
+                ref={layoutFileInputRef}
+                onChange={handleLayoutFilesUpload}
+                accept="image/*,.png,.jpg,.jpeg,.webp,.gif,.svg,.bmp"
+                multiple
+                className="hidden"
+              />
+              <button
+                onClick={() => layoutFileInputRef.current?.click()}
+                className="btn-primary text-[11px] py-1 px-2.5"
+              >
+                <Plus className="w-3.5 h-3.5" /> Upload Image
+              </button>
+            </div>
 
-            <input
-              type="file"
-              ref={layoutFileInputRef}
-              onChange={handleLayoutFilesUpload}
-              accept="image/*,.png,.jpg,.jpeg,.webp,.gif,.svg,.bmp"
-              multiple
-              className="hidden"
-            />
-
-            <button
-              onClick={() => layoutFileInputRef.current?.click()}
-              className="btn-primary text-xs w-full justify-center"
-            >
-              <Plus className="w-4 h-4" /> Add Layout Image(s)
-            </button>
-
-            {/* Layout Cards */}
-            <div className="space-y-2 max-h-48 overflow-auto pr-1">
+            <div className="space-y-1.5 max-h-44 overflow-auto pr-1">
               {layouts.map((l) => (
                 <div
                   key={l.id}
@@ -804,56 +1145,80 @@ export default function LayoutStudio({ onStartExport, setExportStatus, onProgres
                     setCurrentLayoutId(l.id);
                     setSelectedFieldId(l.fields[0]?.id || null);
                   }}
-                  className={`p-2.5 rounded-xl border flex flex-col gap-2 cursor-pointer transition-all ${
+                  className={`p-2 rounded-xl border flex items-center justify-between gap-2 cursor-pointer transition-all ${
                     currentLayoutId === l.id
-                      ? 'bg-amber-500/15 border-amber-500 text-amber-500 font-bold shadow-md'
-                      : 'glass-panel text-slate-500 hover:border-amber-500/40'
+                      ? 'bg-amber-500/15 border-amber-500 text-amber-300 font-bold shadow-md'
+                      : 'glass-panel text-slate-400 hover:border-amber-500/40'
                   }`}
                 >
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="flex items-center gap-2 overflow-hidden">
-                      <img src={l.dataURL} alt="thumb" className="w-8 h-8 rounded object-cover border border-slate-500/30" />
-                      <div className="min-w-0">
-                        <span className="text-xs font-bold block truncate">{l.name}</span>
-                        <span className="text-[10px] opacity-70">{l.fields.length} field(s)</span>
+                  <div className="flex items-center gap-2 overflow-hidden flex-1 min-w-0">
+                    <img src={l.dataURL} alt="thumb" className="w-7 h-7 rounded object-cover border border-slate-700 flex-shrink-0" />
+                    {editingLayoutId === l.id ? (
+                      <input
+                        type="text"
+                        defaultValue={l.name}
+                        autoFocus
+                        onBlur={(e) => {
+                          handleRenameLayout(l.id, e.target.value);
+                          setEditingLayoutId(null);
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            handleRenameLayout(l.id, e.target.value);
+                            setEditingLayoutId(null);
+                          }
+                        }}
+                        onClick={(e) => e.stopPropagation()}
+                        className="input-dark text-[11px] py-0.5 px-1 font-mono w-full"
+                      />
+                    ) : (
+                      <div className="min-w-0 flex-1 flex items-center justify-between pr-1">
+                        <span className="text-[11px] font-bold block truncate">{l.name}</span>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setEditingLayoutId(l.id);
+                          }}
+                          className="text-slate-400 hover:text-amber-300 p-0.5 opacity-60 hover:opacity-100"
+                          title="Rename Layout"
+                        >
+                          <Edit3 className="w-3 h-3" />
+                        </button>
                       </div>
-                    </div>
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        const updated = layouts.filter((item) => item.id !== l.id);
-                        setLayouts(updated);
-                        if (currentLayoutId === l.id) setCurrentLayoutId(updated[0]?.id || null);
-                      }}
-                      className="text-red-400 hover:text-red-300 text-xs p-1"
-                    >
-                      ✕
-                    </button>
+                    )}
                   </div>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      const updated = layouts.filter((item) => item.id !== l.id);
+                      setLayouts(updated);
+                      if (currentLayoutId === l.id) setCurrentLayoutId(updated[0]?.id || null);
+                    }}
+                    className="text-red-400 hover:text-red-300 text-xs p-1 flex-shrink-0"
+                  >
+                    ✕
+                  </button>
                 </div>
               ))}
             </div>
           </div>
 
-          {/* Add Text Button */}
-          <div className="glass-panel p-4 space-y-3">
-            <h3 className="font-bold text-xs uppercase tracking-wider opacity-80">Add Text</h3>
-            <button
-              onClick={() => handleAddField('text')}
-              disabled={!currentLayout}
-              className="btn-secondary text-xs w-full justify-center disabled:opacity-40 font-bold text-emerald-600 dark:text-emerald-400"
-            >
-              <Type className="w-4 h-4 text-emerald-500" /> + Add Text
-            </button>
-          </div>
+          {/* 3. LAYOUT FIELDS / LAYERS LIST */}
+          <div className="glass-panel p-3.5 space-y-2.5">
+            <div className="flex items-center justify-between">
+              <h3 className="font-bold text-xs uppercase tracking-wider text-slate-200 flex items-center gap-1.5">
+                <Layers className="w-3.5 h-3.5 text-indigo-400" /> Text Fields ({currentLayout?.fields.length || 0})
+              </h3>
+              <button
+                onClick={() => handleAddField()}
+                disabled={!currentLayout}
+                className="btn-secondary text-[10px] py-1 px-2.5 text-emerald-400 border-emerald-500/30 hover:bg-emerald-500/10 font-bold"
+              >
+                + Add Text Box
+              </button>
+            </div>
 
-          {/* Current Layout Fields List */}
-          <div className="glass-panel p-4 space-y-3">
-            <h3 className="font-bold text-xs uppercase tracking-wider opacity-80">
-              Layout Fields ({currentLayout?.fields.length || 0})
-            </h3>
-
-            <div className="space-y-1.5 max-h-48 overflow-auto">
+            <div className="space-y-1.5 max-h-44 overflow-auto">
               {currentLayout?.fields.map((f) => (
                 <div
                   key={f.id}
@@ -864,13 +1229,48 @@ export default function LayoutStudio({ onStartExport, setExportStatus, onProgres
                       : 'glass-panel opacity-80 hover:opacity-100'
                   }`}
                 >
-                  <div className="flex items-center gap-2 truncate">
-                    <span className="text-[10px] font-bold px-1.5 py-0.5 rounded font-mono bg-emerald-500/20 text-emerald-600 dark:text-emerald-300">
-                      TXT
+                  <div className="flex items-center gap-2 overflow-hidden flex-1">
+                    <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded font-mono ${
+                      f.type === 'text' ? 'bg-emerald-500/20 text-emerald-300' : 'bg-amber-500/20 text-amber-300'
+                    }`}>
+                      {f.type === 'text' ? 'TXT' : 'QR'}
                     </span>
-                    <span className="font-mono truncate">
-                      {f.isCustomMessage ? 'Custom Message' : f.isMultiColumn ? f.columns?.join(' + ') : f.key}
-                    </span>
+
+                    {editingFieldId === f.id ? (
+                      <input
+                        type="text"
+                        defaultValue={f.name || f.key || 'Field'}
+                        autoFocus
+                        onBlur={(e) => {
+                          handleRenameField(f.id, e.target.value);
+                          setEditingFieldId(null);
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            handleRenameField(f.id, e.target.value);
+                            setEditingFieldId(null);
+                          }
+                        }}
+                        onClick={(e) => e.stopPropagation()}
+                        className="input-dark text-[11px] py-0.5 px-1 font-mono w-full"
+                      />
+                    ) : (
+                      <div className="flex items-center justify-between flex-1 min-w-0 pr-1">
+                        <span className="font-mono text-[11px] truncate">
+                          {f.name || (f.isCustomMessage ? 'Custom Citation' : f.isMultiColumn ? f.columns?.join(' + ') : f.key)}
+                        </span>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setEditingFieldId(f.id);
+                          }}
+                          className="text-slate-400 hover:text-amber-300 p-0.5 opacity-60 hover:opacity-100 ml-1"
+                          title="Rename Field"
+                        >
+                          <Edit3 className="w-3 h-3" />
+                        </button>
+                      </div>
+                    )}
                   </div>
 
                   <button
@@ -886,779 +1286,405 @@ export default function LayoutStudio({ onStartExport, setExportStatus, onProgres
               ))}
             </div>
           </div>
-        </div>
 
-        {/* CENTER PANEL: Interactive Canvas Viewport */}
-        <div className="lg:col-span-6 md:col-span-8 space-y-4">
-          <div className="glass-panel p-4 space-y-3 sticky top-20">
-            <div className="flex items-center justify-between flex-wrap gap-2">
-              <h3 className="font-bold text-sm text-white flex items-center gap-2">
-                <span>Interactive Layout Stage</span>
-              </h3>
-
-              {/* Record Live Preview Switcher & Search Bar */}
-              <div className="flex items-center gap-2">
-                <div className="relative flex items-center">
-                  <Search className="w-3.5 h-3.5 absolute left-2.5 text-slate-400 pointer-events-none z-10" />
-                  <input
-                    type="text"
-                    placeholder="Search record..."
-                    value={rowSearchQuery}
-                    onChange={(e) => setRowSearchQuery(e.target.value)}
-                    className="input-dark text-[11px] py-1 w-36"
-                    style={{ paddingLeft: '1.85rem' }}
-                  />
-                </div>
-
-                <select
-                  value={previewRowIndex}
-                  onChange={(e) => setPreviewRowIndex(Number(e.target.value))}
-                  className="select-dark text-[11px] py-1 max-w-[200px]"
-                >
-                  {filteredPreviewRows.map((r) => {
-                    const actualIndex = rows.indexOf(r);
-                    const name = r.last_name && r.first_name
-                      ? `${r.last_name}, ${r.first_name}`
-                      : r.name || r.first_name || `Record #${actualIndex + 1}`;
-                    return (
-                      <option key={actualIndex} value={actualIndex}>
-                        #{actualIndex + 1}: {name}
-                      </option>
-                    );
-                  })}
-                </select>
-              </div>
-            </div>
-
-            {/* Interactive Canvas Viewport */}
-            <div className="w-full glass-panel p-2 rounded-2xl overflow-hidden shadow-inner min-h-[400px] flex items-center justify-center">
-              <InteractiveStage
-                currentLayout={currentLayout}
-                selectedFieldId={selectedFieldId}
-                onSelectField={setSelectedFieldId}
-                onUpdateField={handleUpdateField}
-                previewRow={activePreviewRow}
-              />
-            </div>
-          </div>
-        </div>
-
-        {/* RIGHT PANEL: Canva-Style Field Inspector & Custom Formatting */}
-        <div className="lg:col-span-3 md:col-span-12 space-y-4">
-          <div className="glass-panel p-4 space-y-3">
-            <div className="flex items-center justify-between border-b border-slate-800 pb-2">
-              <h3 className="font-bold text-xs text-amber-300 uppercase tracking-wider flex items-center gap-1.5">
-                <Sliders className="w-3.5 h-3.5 text-amber-400" /> Selected Box Inspector
-              </h3>
-              {selectedField && (
-                <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-900 text-amber-400 border border-slate-800">
-                  {selectedField.type === 'text' ? 'Text Box' : 'QR Box'}
-                </span>
-              )}
-            </div>
-
-            {selectedField ? (
-              <div className="space-y-3 text-xs">
-                {selectedField.type === 'text' && (
-                  <>
-                    {/* Text Field Content Type Switcher */}
-                    <div className="space-y-2">
-                      <label className="text-[11px] font-semibold text-slate-400 block">Content Mode:</label>
-                      <div className="grid grid-cols-2 gap-1.5 bg-slate-950 p-1 rounded-xl border border-slate-800">
-                        <button
-                          onClick={() => handleUpdateField(selectedField.id, { isCustomMessage: false, isMultiColumn: true })}
-                          className={`py-1.5 px-2 rounded-lg font-bold text-[11px] transition-all ${
-                            !selectedField.isCustomMessage
-                              ? 'bg-amber-500 text-slate-950 shadow'
-                              : 'text-slate-400 hover:text-white'
-                          }`}
-                        >
-                          Column Pick
-                        </button>
-                        <button
-                          onClick={() => handleUpdateField(selectedField.id, { isCustomMessage: true, isMultiColumn: false })}
-                          className={`py-1.5 px-2 rounded-lg font-bold text-[11px] transition-all ${
-                            selectedField.isCustomMessage
-                              ? 'bg-amber-500 text-slate-950 shadow'
-                              : 'text-slate-400 hover:text-white'
-                          }`}
-                        >
-                          Custom Message
-                        </button>
-                      </div>
-                    </div>
-
-                    {/* Mode A: Custom Message Template with Markdown Syntax support */}
-                    {selectedField.isCustomMessage ? (
-                      <div className="space-y-2 p-2.5 rounded-xl bg-slate-950 border border-slate-800">
-                        <div className="flex items-center justify-between">
-                          <label className="text-[11px] font-bold text-amber-300 flex items-center gap-1">
-                            <MessageSquare className="w-3 h-3 text-amber-400" /> Message Template:
-                          </label>
-                        </div>
-
-                        <textarea
-                          ref={templateTextareaRef}
-                          rows={3}
-                          value={selectedField.customTemplate || ''}
-                          onChange={(e) => handleUpdateField(selectedField.id, { customTemplate: e.target.value })}
-                          placeholder="Awarded to ***{first_name} {last_name}*** for completing {Course}"
-                          className="input-dark text-xs font-mono w-full leading-relaxed"
-                        />
-
-                        {/* Formatting Helper Buttons */}
-                        <div className="space-y-1.5 pt-1">
-                          <span className="text-[10px] font-bold text-slate-400 block">Format Highlighted Text / Selection:</span>
-                          <div className="flex flex-wrap gap-1">
-                            <button
-                              onClick={() => applyFormattingToSelection('***', '***')}
-                              className="px-2 py-1 rounded bg-slate-900 hover:bg-slate-800 border border-slate-800 text-[10px] font-bold text-amber-300 flex items-center gap-0.5"
-                              title="Bold & Italic Syntax"
-                            >
-                              <Bold className="w-3 h-3" /><Italic className="w-3 h-3" /> ***text***
-                            </button>
-
-                            <button
-                              onClick={() => applyFormattingToSelection('**', '**')}
-                              className="px-2 py-1 rounded bg-slate-900 hover:bg-slate-800 border border-slate-800 text-[10px] font-bold text-amber-300 flex items-center gap-0.5"
-                              title="Bold Syntax"
-                            >
-                              <Bold className="w-3 h-3" /> **bold**
-                            </button>
-
-                            <button
-                              onClick={() => applyFormattingToSelection('*', '*')}
-                              className="px-2 py-1 rounded bg-slate-900 hover:bg-slate-800 border border-slate-800 text-[10px] text-indigo-300 flex items-center gap-0.5"
-                              title="Italic Syntax"
-                            >
-                              <Italic className="w-3 h-3" /> *italic*
-                            </button>
-
-                            <button
-                              onClick={() => applyFormattingToSelection('~~', '~~')}
-                              className="px-2 py-1 rounded bg-slate-900 hover:bg-slate-800 border border-slate-800 text-[10px] text-pink-300 flex items-center gap-0.5"
-                              title="Strikethrough Syntax"
-                            >
-                              <Strikethrough className="w-3 h-3" /> ~~strike~~
-                            </button>
-
-                            <button
-                              onClick={() => applyFormattingToSelection('<u>', '</u>')}
-                              className="px-2 py-1 rounded bg-slate-900 hover:bg-slate-800 border border-slate-800 text-[10px] text-emerald-300 flex items-center gap-0.5"
-                              title="Underline Syntax"
-                            >
-                              <Underline className="w-3 h-3" /> &lt;u&gt;underline&lt;/u&gt;
-                            </button>
-                          </div>
-                        </div>
-
-                        {/* Quick Column Variable Insert Pills */}
-                        <div className="space-y-1 pt-1.5 border-t border-slate-900">
-                          <span className="text-[10px] font-semibold text-slate-400 block">Insert Variable at Cursor:</span>
-                          <div className="flex flex-wrap gap-1 max-h-24 overflow-auto">
-                            {headers.map((h) => (
-                              <button
-                                key={h}
-                                onClick={() => insertVariableAtCursor(`{${h}}`)}
-                                className="px-1.5 py-0.5 rounded bg-slate-900 hover:bg-amber-500/20 text-[10px] font-mono text-slate-300 hover:text-amber-300 border border-slate-800"
-                              >
-                                +{h}
-                              </button>
-                            ))}
-                          </div>
-                        </div>
-                      </div>
-                    ) : (
-                      /* Mode B: Column Pick Mode */
-                      <div className="space-y-2">
-                        <div className="p-2 rounded-xl bg-slate-900 border border-slate-800 flex items-center justify-between">
-                          <span className="font-semibold text-slate-300">Multi-Column Mode</span>
-                          <input
-                            type="checkbox"
-                            checked={selectedField.isMultiColumn || false}
-                            onChange={(e) => handleUpdateField(selectedField.id, { isMultiColumn: e.target.checked })}
-                            className="w-4 h-4 accent-amber-500 cursor-pointer"
-                          />
-                        </div>
-
-                        {selectedField.isMultiColumn ? (
-                          <div className="space-y-2 p-2.5 rounded-xl bg-slate-950 border border-slate-800">
-                            <label className="text-[11px] font-bold text-amber-300 block">Pick CSV Columns to Combine:</label>
-                            <div className="space-y-1 max-h-36 overflow-auto">
-                              {headers.map((h) => {
-                                const isChecked = selectedField.columns?.includes(h);
-                                return (
-                                  <label key={h} className="flex items-center justify-between p-1 rounded hover:bg-slate-900 cursor-pointer">
-                                    <div className="flex items-center gap-2">
-                                      <input
-                                        type="checkbox"
-                                        checked={isChecked}
-                                        onChange={() => handleToggleColumn(h)}
-                                        className="accent-amber-500"
-                                      />
-                                      <span className="font-mono text-slate-200">{h}</span>
-                                    </div>
-                                  </label>
-                                );
-                              })}
-                            </div>
-
-                            {selectedField.columns && selectedField.columns.length > 0 && (
-                              <div className="pt-2 border-t border-slate-800 space-y-1">
-                                <label className="text-[10px] font-bold text-slate-400 block">Column Render Order:</label>
-                                {selectedField.columns.map((col, idx) => (
-                                  <div key={col} className="flex items-center justify-between bg-slate-900 px-2 py-1 rounded text-[11px]">
-                                    <span className="font-mono text-amber-300">{idx + 1}. {col}</span>
-                                    <div className="flex items-center gap-1">
-                                      <button
-                                        onClick={() => handleMoveColumn(idx, 'up')}
-                                        disabled={idx === 0}
-                                        className="text-slate-400 hover:text-white disabled:opacity-30 p-0.5"
-                                        title="Move Up"
-                                      >
-                                        <ArrowUp className="w-3 h-3" />
-                                      </button>
-                                      <button
-                                        onClick={() => handleMoveColumn(idx, 'down')}
-                                        disabled={idx === selectedField.columns.length - 1}
-                                        className="text-slate-400 hover:text-white disabled:opacity-30 p-0.5"
-                                        title="Move Down"
-                                      >
-                                        <ArrowDown className="w-3 h-3" />
-                                      </button>
-                                      <button
-                                        onClick={() => handleRemoveColumn(col)}
-                                        className="text-red-400 hover:text-red-300 hover:bg-red-500/10 rounded p-0.5"
-                                        title="Remove Column"
-                                      >
-                                        <Trash2 className="w-3 h-3" />
-                                      </button>
-                                    </div>
-                                  </div>
-                                ))}
-                              </div>
-                            )}
-
-                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                              <div>
-                                <label className="text-[10px] font-semibold text-slate-400 block mb-0.5">Separator String:</label>
-                                <input
-                                  type="text"
-                                  value={selectedField.separator !== undefined ? selectedField.separator : ' '}
-                                  onChange={(e) => handleUpdateField(selectedField.id, { separator: e.target.value })}
-                                  placeholder="e.g. , or -"
-                                  className="input-dark text-xs font-mono"
-                                />
-                              </div>
-
-                              <div>
-                                <label className="text-[10px] font-semibold text-slate-400 block mb-0.5">Separator Position:</label>
-                                <select
-                                  value={selectedField.separatorPosition || 'between_all'}
-                                  onChange={(e) => handleUpdateField(selectedField.id, { separatorPosition: e.target.value })}
-                                  className="select-dark text-xs w-full"
-                                >
-                                  <option value="between_all">Between All (Doe, John, Alex)</option>
-                                  <option value="after_first">After 1st Only (Doe, John Alex)</option>
-                                  <option value="before_last">Before Last Only (John Alex, Doe)</option>
-                                </select>
-                              </div>
-                            </div>
-                          </div>
-                        ) : (
-                          <div>
-                            <label className="text-[11px] font-semibold text-slate-400 block mb-1">CSV Data Column Key:</label>
-                            <select
-                              value={selectedField.key || ''}
-                              onChange={(e) => handleUpdateField(selectedField.id, { key: e.target.value })}
-                              className="select-dark text-xs w-full"
-                            >
-                              {headers.map((h) => (
-                                <option key={h} value={h}>{h}</option>
-                              ))}
-                            </select>
-                          </div>
-                        )}
-                      </div>
-                    )}
-
-                    {/* Font Size & Sizing Mode Controls */}
-                    <div className="p-2.5 rounded-xl bg-slate-950 border border-slate-800 space-y-2">
-                      <div className="flex items-center justify-between">
-                        <label className="text-[11px] font-bold text-amber-300">Font Size (px):</label>
-                        <div className="flex items-center gap-1">
-                          <span className="text-[10px] text-slate-400">Fixed Size:</span>
-                          <input
-                            type="checkbox"
-                            checked={selectedField.isFixedFontSize || false}
-                            onChange={(e) => handleUpdateField(selectedField.id, { isFixedFontSize: e.target.checked })}
-                            className="w-3.5 h-3.5 accent-amber-500 cursor-pointer"
-                          />
-                        </div>
-                      </div>
-
-                      <div className="flex items-center gap-2">
-                        <input
-                          type="range"
-                          min="10"
-                          max="160"
-                          step="1"
-                          value={selectedField.fontSize || 36}
-                          onChange={(e) => handleUpdateField(selectedField.id, { fontSize: Number(e.target.value) })}
-                          className="w-full accent-amber-500 cursor-pointer h-1.5 bg-slate-800 rounded-lg"
-                        />
-                        <input
-                          type="number"
-                          min="8"
-                          max="240"
-                          value={selectedField.fontSize || 36}
-                          onChange={(e) => handleUpdateField(selectedField.id, { fontSize: Number(e.target.value) })}
-                          className="w-14 input-dark text-xs font-mono text-center px-1 py-0.5"
-                        />
-                      </div>
-                      <span className="text-[10px] text-slate-400 block">
-                        {selectedField.isFixedFontSize
-                          ? 'Strict Fixed Size (Will not auto-shrink)'
-                          : 'Max Font Size Cap (Auto-shrinks if text overflows bounding box)'}
-                      </span>
-                    </div>
-
-                    {/* Letter Spacing & Word Spacing Controls */}
-                    <div className="grid grid-cols-2 gap-2 p-2 rounded-xl bg-slate-950/80 border border-slate-800">
-                      <div>
-                        <div className="flex items-center justify-between mb-1">
-                          <label className="text-[10px] font-bold text-amber-300">Letter Spacing:</label>
-                          <span className="text-[10px] font-mono text-slate-300">{selectedField.letterSpacing || 0}px</span>
-                        </div>
-                        <input
-                          type="range"
-                          min="-2"
-                          max="25"
-                          step="0.5"
-                          value={selectedField.letterSpacing || 0}
-                          onChange={(e) => handleUpdateField(selectedField.id, { letterSpacing: parseFloat(e.target.value) })}
-                          className="w-full accent-amber-500 cursor-pointer h-1.5 bg-slate-800 rounded-lg"
-                        />
-                      </div>
-
-                      <div>
-                        <div className="flex items-center justify-between mb-1">
-                          <label className="text-[10px] font-bold text-amber-300">Word Spacing:</label>
-                          <span className="text-[10px] font-mono text-slate-300">{selectedField.wordSpacing || 0}px</span>
-                        </div>
-                        <input
-                          type="range"
-                          min="-2"
-                          max="35"
-                          step="0.5"
-                          value={selectedField.wordSpacing || 0}
-                          onChange={(e) => handleUpdateField(selectedField.id, { wordSpacing: parseFloat(e.target.value) })}
-                          className="w-full accent-amber-500 cursor-pointer h-1.5 bg-slate-800 rounded-lg"
-                        />
-                      </div>
-                    </div>
-
-                    {/* Casing Rules */}
-                    <div>
-                      <label className="text-[11px] font-semibold text-slate-400 block mb-1">Text Casing Rule:</label>
-                      <select
-                        value={selectedField.casing || 'as-is'}
-                        onChange={(e) => handleUpdateField(selectedField.id, { casing: e.target.value })}
-                        className="select-dark text-xs w-full"
-                      >
-                        <option value="as-is">As-Is (Preserve CSV Case)</option>
-                        <option value="title">Title Case / Titled (e.g. John Doe)</option>
-                        <option value="uppercase">UPPERCASE (ALL CAPS)</option>
-                        <option value="lowercase">lowercase</option>
-                        <option value="capitalize">Capitalize Each Word</option>
-                      </select>
-                    </div>
-
-                    {/* Font Selector including Custom Uploaded Fonts */}
-                    <div>
-                      <label className="text-[11px] font-semibold text-slate-400 block mb-1">Font Family:</label>
-                      <select
-                        value={selectedField.fontFamily || 'Georgia, serif'}
-                        onChange={(e) => handleUpdateField(selectedField.id, { fontFamily: e.target.value })}
-                        className="select-dark text-xs w-full"
-                      >
-                        <option value="Georgia, serif">Georgia (Classic Serif)</option>
-                        <option value="Playfair Display, serif">Playfair Display</option>
-                        <option value="Cinzel, serif">Cinzel (Luxury Serif)</option>
-                        <option value="Plus Jakarta Sans, sans-serif">Plus Jakarta Sans</option>
-                        <option value="Inter, sans-serif">Inter</option>
-
-                        {/* Custom uploaded font list */}
-                        {customFonts.map((cf) => (
-                          <option key={cf.name} value={cf.family}>{cf.displayName}</option>
-                        ))}
-                      </select>
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-2">
-                      <div>
-                        <label className="text-[11px] font-semibold text-slate-400 block mb-1">Weight:</label>
-                        <select
-                          value={selectedField.fontWeight || '600'}
-                          onChange={(e) => handleUpdateField(selectedField.id, { fontWeight: e.target.value })}
-                          className="select-dark text-xs w-full"
-                        >
-                          <option value="400">Normal (400)</option>
-                          <option value="600">SemiBold (600)</option>
-                          <option value="700">Bold (700)</option>
-                        </select>
-                      </div>
-
-                      <div>
-                        <label className="text-[11px] font-semibold text-slate-400 block mb-1">Align:</label>
-                        <select
-                          value={selectedField.align || 'center'}
-                          onChange={(e) => handleUpdateField(selectedField.id, { align: e.target.value })}
-                          className="select-dark text-xs w-full"
-                        >
-                          <option value="center">Center</option>
-                          <option value="left">Left</option>
-                          <option value="right">Right</option>
-                        </select>
-                      </div>
-                    </div>
-
-                    <div>
-                      <label className="text-[11px] font-semibold text-slate-400 block mb-1">Text Color (Color / Hex):</label>
-                      <div className="flex items-center gap-2">
-                        <input
-                          type="color"
-                          value={selectedField.color && selectedField.color.startsWith('#') ? selectedField.color : '#ffffff'}
-                          onChange={(e) => handleUpdateField(selectedField.id, { color: e.target.value })}
-                          className="h-8 w-10 rounded bg-slate-900 border border-slate-800 cursor-pointer p-0.5 flex-shrink-0"
-                          title="Choose Color"
-                        />
-                        <input
-                          type="text"
-                          value={selectedField.color || '#ffffff'}
-                          onChange={(e) => handleUpdateField(selectedField.id, { color: e.target.value })}
-                          placeholder="#ffffff"
-                          className="input-dark text-xs font-mono w-full"
-                        />
-                      </div>
-                    </div>
-                  </>
-                )}
-
-                {selectedField.type === 'qr' && (
-                  <div>
-                    <label className="text-[11px] font-semibold text-slate-400 block mb-1">QR Data Column:</label>
-                    <select
-                      value={selectedField.key || ''}
-                      onChange={(e) => handleUpdateField(selectedField.id, { key: e.target.value })}
-                      className="select-dark text-xs w-full"
-                    >
-                      {headers.map((h) => (
-                        <option key={h} value={h}>{h}</option>
-                      ))}
-                    </select>
-                  </div>
-                )}
-              </div>
-            ) : (
-              <span className="text-xs text-slate-500 block py-4 text-center">Click any box on stage to edit configuration.</span>
-            )}
-          </div>
-
-          {/* Batch Data Loader */}
-          <div className="glass-panel p-4 space-y-3">
+          {/* 4. BATCH DATASET LOADER */}
+          <div className="glass-panel p-3.5 space-y-2.5">
             <div className="flex items-center justify-between">
-              <h3 className="font-bold text-xs uppercase tracking-wider text-main">
-                Batch Data ({rows.length} rows)
+              <h3 className="font-bold text-xs uppercase tracking-wider text-slate-200">
+                Batch Data ({tabulatedRows.length} rows)
               </h3>
-              {rows.length > 0 && (
-                <span className="badge badge-indigo text-[10px]">
-                  {selectedRowIndices.size} of {rows.length} Selected
-                </span>
-              )}
+              <input
+                type="file"
+                ref={dataFileInputRef}
+                onChange={handleDataFileUpload}
+                accept=".csv,.xlsx,.xls"
+                className="hidden"
+              />
+              <button
+                onClick={() => dataFileInputRef.current?.click()}
+                className="btn-secondary text-[11px] py-1 px-2.5 font-bold"
+              >
+                <FileSpreadsheet className="w-3.5 h-3.5 text-indigo-400" /> Upload File
+              </button>
             </div>
 
             {rows.length > 0 && (
-              <div className="flex items-center justify-between gap-1 py-1 border-y border-slate-700/20 text-xs">
-                <button
-                  onClick={handleSelectAllRows}
-                  className="text-[11px] font-bold text-amber-500 hover:underline flex items-center gap-1"
-                >
-                  <CheckSquare className="w-3.5 h-3.5" /> Select All
-                </button>
-                <button
-                  onClick={handleDeselectAllRows}
-                  className="text-[11px] font-bold text-slate-400 hover:underline flex items-center gap-1"
-                >
-                  <Square className="w-3.5 h-3.5" /> Deselect All
-                </button>
+              <div className="text-[10.5px] font-mono text-slate-400 flex items-center justify-between">
+                <span>Total Imported:</span>
+                <span className="text-amber-300 font-bold">{selectedRowIndices.size} / {rows.length} Selected</span>
               </div>
-            )}
-
-            <input
-              type="file"
-              ref={dataFileInputRef}
-              onChange={handleDataFileUpload}
-              accept=".csv,.xlsx,.xls"
-              className="hidden"
-            />
-
-            <div className="grid grid-cols-2 gap-2">
-              <button
-                onClick={() => dataFileInputRef.current?.click()}
-                className="btn-secondary text-[11px] justify-center"
-              >
-                <FileSpreadsheet className="w-3.5 h-3.5 text-indigo-500" /> Upload CSV/XLSX
-              </button>
-
-              <button
-                onClick={() => setIsDataEditorOpen(true)}
-                disabled={rows.length === 0}
-                className="btn-secondary text-[11px] justify-center border-indigo-500/40 text-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed"
-                title={rows.length === 0 ? 'Upload CSV/XLSX file to edit data table' : 'Edit Data Table'}
-              >
-                <Table className="w-3.5 h-3.5 text-indigo-500" /> Edit Data Table
-              </button>
-            </div>
-
-            {dataFileName && (
-              <span className="text-[10px] text-slate-400 block truncate">{dataFileName}</span>
             )}
           </div>
 
-          {/* ZIP Folder Hierarchy & Sorting Options */}
-          <div className="glass-panel p-4 space-y-3 border-amber-500/30">
-            <div className="flex items-center justify-between">
-              <h3 className="font-bold text-xs text-amber-300 uppercase tracking-wider flex items-center gap-1.5">
-                <FolderTree className="w-3.5 h-3.5 text-amber-400" /> Zip Folder Hierarchy
-              </h3>
-              {folderSortColumns.length > 0 && (
-                <button
-                  onClick={() => setFolderSortColumns([])}
-                  className="text-[10px] text-red-400 hover:underline"
-                >
-                  Clear Folders
-                </button>
-              )}
-            </div>
-            <p className="text-[11px] text-slate-400 leading-normal">
-              Organize exported certificates into nested folders in the ZIP file based on column values.
-            </p>
 
-            {/* Active Folder Priority List */}
-            {folderSortColumns.length > 0 && (
-              <div className="space-y-1.5">
-                {folderSortColumns.map((col, idx) => (
-                  <div
-                    key={col}
-                    className="flex items-center justify-between p-2 rounded-xl bg-slate-950 border border-slate-800 text-xs"
+        </div>
+
+        {/* CENTER / MAIN WORKSPACE (9 COLS): CANVA-STYLE TOP TOOLBAR & BIG STAGE */}
+        <div
+          ref={studioWorkspaceRef}
+          className={`lg:col-span-9 space-y-3 transition-all ${
+            isFullscreen ? 'fixed inset-0 z-50 bg-slate-950 p-4 overflow-y-auto shadow-2xl' : ''
+          }`}
+        >
+          
+          {/* CANVA-STYLE TOP FLOATING TOOLBAR */}
+          <div className="glass-panel p-2.5 space-y-2 border-amber-500/30 sticky top-16 z-30 shadow-xl">
+            <div className="flex items-center justify-between flex-wrap gap-2">
+              
+              {/* Selected Field Label / Type */}
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-bold text-amber-300 flex items-center gap-1">
+                  <Sliders className="w-3.5 h-3.5 text-amber-400" />
+                  {selectedField ? (selectedField.name || selectedField.type.toUpperCase()) : 'Select Box on Stage'}
+                </span>
+              </div>
+
+              {selectedField && selectedField.type === 'text' && (
+                <div className="flex items-center gap-2 flex-wrap">
+                  {/* Font Family Dropdown (Custom Fonts Listed at Top!) */}
+                  <select
+                    value={selectedField.fontFamily || 'Georgia, serif'}
+                    onChange={(e) => handleUpdateField(selectedField.id, { fontFamily: e.target.value })}
+                    className="select-dark text-xs py-1 px-2.5 font-medium max-w-[180px]"
                   >
-                    <div className="flex items-center gap-2 overflow-hidden">
-                      <span className="text-[10px] font-mono font-bold px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 flex-shrink-0">
-                        Level {idx + 1}
+                    {customFonts.length > 0 && (
+                      <optgroup label="🌟 Custom Uploaded Fonts">
+                        {customFonts.map((cf) => (
+                          <option key={cf.name} value={cf.family}>{cf.displayName}</option>
+                        ))}
+                      </optgroup>
+                    )}
+                    <optgroup label="System Standard Fonts">
+                      <option value="Georgia, serif">Georgia (Serif)</option>
+                      <option value="Playfair Display, serif">Playfair Display</option>
+                      <option value="Cinzel, serif">Cinzel (Luxury Serif)</option>
+                      <option value="Plus Jakarta Sans, sans-serif">Plus Jakarta Sans</option>
+                      <option value="Inter, sans-serif">Inter (Sans)</option>
+                    </optgroup>
+                  </select>
+
+                  {/* Font Size Input */}
+                  <div className="flex items-center gap-1 bg-slate-950 px-2 py-0.5 rounded-xl border border-slate-800" title="Font Size (px)">
+                    <span className="text-[10px] text-slate-400 font-bold">Size:</span>
+                    <input
+                      type="number"
+                      min="8"
+                      max="240"
+                      value={selectedField.fontSize || 36}
+                      onChange={(e) => handleUpdateField(selectedField.id, { fontSize: Number(e.target.value) })}
+                      className="w-12 bg-transparent text-xs font-mono text-center text-amber-300 focus:outline-none"
+                    />
+                  </div>
+
+                  {/* Letter Spacing Input */}
+                  <div className="flex items-center gap-1 bg-slate-950 px-2 py-0.5 rounded-xl border border-slate-800" title="Letter Spacing (px)">
+                    <span className="text-[10px] text-slate-400 font-bold font-mono">Letter:</span>
+                    <input
+                      type="number"
+                      step="0.5"
+                      min="-10"
+                      max="50"
+                      value={selectedField.letterSpacing || 0}
+                      onChange={(e) => handleUpdateField(selectedField.id, { letterSpacing: Number(e.target.value) })}
+                      className="w-10 bg-transparent text-xs font-mono text-center text-amber-300 focus:outline-none"
+                    />
+                    <span className="text-[9px] text-slate-500 font-mono">px</span>
+                  </div>
+
+                  {/* Word Spacing Input */}
+                  <div className="flex items-center gap-1 bg-slate-950 px-2 py-0.5 rounded-xl border border-slate-800" title="Word Spacing (px)">
+                    <span className="text-[10px] text-slate-400 font-bold font-mono">Word:</span>
+                    <input
+                      type="number"
+                      step="0.5"
+                      min="-10"
+                      max="100"
+                      value={selectedField.wordSpacing || 0}
+                      onChange={(e) => handleUpdateField(selectedField.id, { wordSpacing: Number(e.target.value) })}
+                      className="w-10 bg-transparent text-xs font-mono text-center text-amber-300 focus:outline-none"
+                    />
+                    <span className="text-[9px] text-slate-500 font-mono">px</span>
+                  </div>
+
+                  {/* Formatting Buttons (Inline & Font Property B, I, S, U) */}
+                  {(() => {
+                    const activeTagKey = selectedField?.selectedTag;
+                    const activeTagStyle = activeTagKey ? selectedField?.styledTags?.[activeTagKey] : null;
+
+                    const fieldIsBold = selectedField?.fontWeight === '700' || selectedField?.fontWeight === 'bold';
+                    const fieldIsItalic = selectedField?.fontStyle === 'italic';
+                    const fieldIsStrike = Boolean(selectedField?.strikethrough);
+                    const fieldIsUnderline = Boolean(selectedField?.underline);
+
+                    const isBoldActive = activeTagStyle?.bold !== undefined ? Boolean(activeTagStyle.bold) : fieldIsBold;
+                    const isItalicActive = activeTagStyle?.italic !== undefined ? Boolean(activeTagStyle.italic) : fieldIsItalic;
+                    const isStrikeActive = activeTagStyle?.strikethrough !== undefined ? Boolean(activeTagStyle.strikethrough) : fieldIsStrike;
+                    const isUnderlineActive = activeTagStyle?.underline !== undefined ? Boolean(activeTagStyle.underline) : fieldIsUnderline;
+
+                    return (
+                      <div className="flex items-center gap-0.5 bg-slate-950 p-0.5 rounded-xl border border-slate-800">
+                        <button
+                          onMouseDown={(e) => { e.preventDefault(); handleCaptureSelection(e); }}
+                          onClick={() => handleApplyInlineStyle('bold')}
+                          className={`p-1.5 rounded text-xs ${
+                            isBoldActive ? 'bg-amber-500 text-slate-950 font-black' : 'text-slate-400 hover:text-white'
+                          }`}
+                          title="Toggle Bold"
+                        >
+                          <Bold className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          onMouseDown={(e) => { e.preventDefault(); handleCaptureSelection(e); }}
+                          onClick={() => handleApplyInlineStyle('italic')}
+                          className={`p-1.5 rounded text-xs ${
+                            isItalicActive ? 'bg-amber-500 text-slate-950 font-bold' : 'text-slate-400 hover:text-white'
+                          }`}
+                          title="Toggle Italic"
+                        >
+                          <Italic className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          onMouseDown={(e) => { e.preventDefault(); handleCaptureSelection(e); }}
+                          onClick={() => handleApplyInlineStyle('strikethrough')}
+                          className={`p-1.5 rounded text-xs ${
+                            isStrikeActive ? 'bg-amber-500 text-slate-950 font-bold' : 'text-slate-400 hover:text-white'
+                          }`}
+                          title="Toggle Strikethrough"
+                        >
+                          <Strikethrough className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          onMouseDown={(e) => { e.preventDefault(); handleCaptureSelection(e); }}
+                          onClick={() => handleApplyInlineStyle('underline')}
+                          className={`p-1.5 rounded text-xs ${
+                            isUnderlineActive ? 'bg-amber-500 text-slate-950 font-bold' : 'text-slate-400 hover:text-white'
+                          }`}
+                          title="Toggle Underline"
+                        >
+                          <Underline className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    );
+                  })()}
+
+                  {/* Alignment Switcher */}
+                  <div className="flex items-center gap-0.5 bg-slate-950 p-0.5 rounded-xl border border-slate-800">
+                    <button
+                      onClick={() => handleUpdateField(selectedField.id, { align: 'left' })}
+                      className={`p-1.5 rounded ${selectedField.align === 'left' ? 'bg-amber-500 text-slate-950' : 'text-slate-400 hover:text-white'}`}
+                      title="Align Left"
+                    >
+                      <AlignLeft className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      onClick={() => handleUpdateField(selectedField.id, { align: 'center' })}
+                      className={`p-1.5 rounded ${selectedField.align === 'center' ? 'bg-amber-500 text-slate-950' : 'text-slate-400 hover:text-white'}`}
+                      title="Align Center"
+                    >
+                      <AlignCenter className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      onClick={() => handleUpdateField(selectedField.id, { align: 'right' })}
+                      className={`p-1.5 rounded ${selectedField.align === 'right' ? 'bg-amber-500 text-slate-950' : 'text-slate-400 hover:text-white'}`}
+                      title="Align Right"
+                    >
+                      <AlignRight className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+
+                  {/* Multi-line / Next Line Toggle */}
+                  <div className="flex items-center bg-slate-950 p-0.5 rounded-xl border border-slate-800">
+                    <button
+                      onClick={() => handleUpdateField(selectedField.id, { allowWrap: !selectedField.allowWrap })}
+                      className={`flex items-center gap-1.5 px-2 py-1 rounded text-xs font-semibold transition-all ${
+                        selectedField.allowWrap
+                          ? 'bg-amber-500 text-slate-950 shadow'
+                          : 'text-slate-400 hover:text-white'
+                      }`}
+                      title={
+                        selectedField.allowWrap
+                          ? 'Next Line Allowed: Text wraps onto multiple lines instead of shrinking font size'
+                          : 'Single Line Only: Font size automatically shrinks to fit inside 1 line'
+                      }
+                    >
+                      <WrapText className="w-3.5 h-3.5" />
+                      <span className="text-[10px] uppercase font-mono tracking-wider">
+                        {selectedField.allowWrap ? 'Next Line: ON' : 'Next Line: OFF'}
                       </span>
-                      <span className="font-semibold truncate text-slate-200">{col}</span>
-                    </div>
+                    </button>
+                  </div>
 
-                    <div className="flex items-center gap-1 flex-shrink-0">
-                      {idx > 0 && (
-                        <button
-                          onClick={() => handleMoveFolderSortColumn(idx, 'up')}
-                          className="p-1 rounded hover:bg-slate-800 text-slate-400 hover:text-white"
-                          title="Move Priority Up"
-                        >
-                          <ArrowUp className="w-3 h-3" />
-                        </button>
-                      )}
-                      {idx < folderSortColumns.length - 1 && (
-                        <button
-                          onClick={() => handleMoveFolderSortColumn(idx, 'down')}
-                          className="p-1 rounded hover:bg-slate-800 text-slate-400 hover:text-white"
-                          title="Move Priority Down"
-                        >
-                          <ArrowDown className="w-3 h-3" />
-                        </button>
-                      )}
+                  {/* Text Casing Switcher */}
+                  <select
+                    value={selectedField.casing || 'as-is'}
+                    onChange={(e) => handleUpdateField(selectedField.id, { casing: e.target.value })}
+                    className="select-dark text-xs py-1 px-2 font-mono"
+                    title="Text Casing Transformation"
+                  >
+                    <option value="as-is">As-Is Casing</option>
+                    <option value="uppercase">UPPERCASE</option>
+                    <option value="lowercase">lowercase</option>
+                    <option value="capitalize">Title Case</option>
+                  </select>
+
+                  {/* Undo & Redo Shortcuts Buttons */}
+                  <div className="flex items-center gap-0.5 bg-slate-950 p-0.5 rounded-xl border border-slate-800">
+                    <button
+                      onClick={handleUndo}
+                      disabled={historyStack.length === 0}
+                      className={`p-1.5 rounded ${historyStack.length > 0 ? 'text-slate-200 hover:bg-slate-800' : 'text-slate-600 opacity-50 cursor-not-allowed'}`}
+                      title="Undo (Ctrl+Z)"
+                    >
+                      <RotateCcw className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      onClick={handleRedo}
+                      disabled={redoStack.length === 0}
+                      className={`p-1.5 rounded ${redoStack.length > 0 ? 'text-slate-200 hover:bg-slate-800' : 'text-slate-600 opacity-50 cursor-not-allowed'}`}
+                      title="Redo (Ctrl+Y)"
+                    >
+                      <RotateCw className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+
+                  {/* Rich Drag-Type Color Picker Button */}
+                  {(() => {
+                    const activeTagKey = selectedField?.selectedTag;
+                    const activeTagStyle = activeTagKey ? selectedField?.styledTags?.[activeTagKey] : null;
+                    const currentColor = activeTagStyle?.color || selectedField?.color || '#FFFFFF';
+
+                    return (
                       <button
-                        onClick={() => handleRemoveFolderSortColumn(col)}
-                        className="p-1 rounded hover:bg-slate-800 text-red-400 hover:text-red-300 ml-1"
-                        title="Remove Folder Level"
+                        onClick={() => setIsColorPickerOpen(true)}
+                        className="flex items-center gap-1.5 px-2 py-1 bg-slate-950 rounded-xl border border-slate-800 hover:border-amber-400/60 transition group"
+                        title={activeTagKey ? `Change color for selected tag "${activeTagKey}"` : "Change text color for entire box & view Color Theories"}
                       >
-                        ✕
+                        <div
+                          className="w-4 h-4 rounded-md border border-slate-700 shadow-sm group-hover:scale-110 transition"
+                          style={{ backgroundColor: currentColor }}
+                        />
+                        <span className="text-[10px] font-mono font-bold text-slate-300 group-hover:text-amber-300">
+                          {currentColor}
+                        </span>
+                        <Palette className="w-3.5 h-3.5 text-amber-400" />
                       </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
+                    );
+                  })()}
 
-            {/* Column Picker Dropdown */}
-            {headers.filter((h) => !folderSortColumns.includes(h)).length > 0 ? (
-              <select
-                value=""
-                onChange={(e) => {
-                  handleAddFolderSortColumn(e.target.value);
-                  e.target.value = '';
-                }}
-                className="select-dark text-xs w-full py-1.5"
-                disabled={rows.length === 0}
-              >
-                <option value="" disabled>
-                  {rows.length === 0 ? 'Upload dataset to add folder levels...' : '+ Add Folder Column...'}
-                </option>
-                {headers
-                  .filter((h) => !folderSortColumns.includes(h))
-                  .map((h) => (
-                    <option key={h} value={h}>
-                      Sort by: {h}
-                    </option>
-                  ))}
-              </select>
-            ) : (
-              <span className="text-[10px] text-slate-500 block italic text-center">
-                All columns added to folder structure
-              </span>
-            )}
-
-            {/* Folder Naming Mode Selector */}
-            {folderSortColumns.length > 0 && (
-              <div className="space-y-1 pt-1">
-                <label className="text-[11px] font-semibold text-slate-400 block">Folder Format:</label>
-                <div className="grid grid-cols-2 gap-1.5 bg-slate-950 p-1 rounded-xl border border-slate-800">
-                  <button
-                    type="button"
-                    onClick={() => setFolderStructureMode('combined')}
-                    className={`py-1 px-2 rounded-lg font-bold text-[10px] transition-all ${
-                      folderStructureMode === 'combined'
-                        ? 'bg-amber-500 text-slate-950 shadow'
-                        : 'text-slate-400 hover:text-white'
-                    }`}
-                  >
-                    Combined (e.g. "BSCS 1 B")
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setFolderStructureMode('nested')}
-                    className={`py-1 px-2 rounded-lg font-bold text-[10px] transition-all ${
-                      folderStructureMode === 'nested'
-                        ? 'bg-amber-500 text-slate-950 shadow'
-                        : 'text-slate-400 hover:text-white'
-                    }`}
-                  >
-                    Nested (e.g. "BSCS / 1 / B")
-                  </button>
                 </div>
-              </div>
-            )}
-
-            {/* Folder Structure Preview Path */}
-            {folderSortColumns.length > 0 && (
-              <div className="p-2 rounded-lg bg-amber-500/10 border border-amber-500/20 text-[10px] font-mono text-amber-300 truncate">
-                ZIP / {folderStructureMode === 'combined'
-                  ? folderSortColumns.map((c) => `{${c}}`).join(' ')
-                  : folderSortColumns.map((c) => `{${c}}`).join(' / ')
-                } / Certificate.png
-              </div>
-            )}
-          </div>
-
-          {/* Export Resolution & Performance Settings */}
-          <div className="glass-panel p-4 space-y-3 border-amber-500/30">
-            <div className="flex items-center justify-between border-b border-slate-800/80 pb-2">
-              <h3 className="font-bold text-xs text-amber-300 uppercase tracking-wider flex items-center gap-1.5">
-                <Sliders className="w-3.5 h-3.5 text-amber-400" /> Export Quality & Memory
-              </h3>
-            </div>
-
-            {/* Resolution Dropdown */}
-            <div className="space-y-1">
-              <label className="text-[11px] font-semibold text-slate-400 block">Export Resolution:</label>
-              <select
-                value={exportResolution}
-                onChange={(e) => setExportResolution(Number(e.target.value))}
-                className="w-full text-xs py-2 px-3 font-semibold text-amber-300 bg-slate-950 border border-slate-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-500/40 cursor-pointer shadow-sm"
-              >
-                <option value={0}>Original (100% Native Quality)</option>
-                <option value={2560}>Ultra 2.5K (2560px Max)</option>
-                <option value={1920}>Full HD 1080p (1920px Max)</option>
-                <option value={1280}>Compact (1280px Max - Fast)</option>
-              </select>
-            </div>
-
-            {/* Safe Memory Mode Toggle */}
-            <div className="space-y-2 pt-2 border-t border-slate-800/60">
-              <label className="flex items-center justify-between p-2.5 rounded-xl bg-slate-950 border border-slate-800 cursor-pointer hover:border-slate-700 transition-colors">
-                <div className="space-y-0.5 pr-2">
-                  <div className="flex items-center gap-1.5">
-                    <span className="text-[11px] font-bold text-amber-300">Safe Memory Mode</span>
-                    <span className="text-[9px] font-mono font-bold px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
-                      Mobile Safe
-                    </span>
-                  </div>
-                  <span className="text-[10px] text-slate-400 block leading-tight">
-                    Throttles RAM usage & sweeps memory to prevent mobile crashes.
-                  </span>
-                </div>
-                <input
-                  type="checkbox"
-                  checked={safeMemoryMode}
-                  onChange={(e) => setSafeMemoryMode(e.target.checked)}
-                  className="w-4 h-4 accent-amber-500 rounded cursor-pointer flex-shrink-0"
-                />
-              </label>
-
-              {/* Detailed Instructions on Safe Mode */}
-              <div className="p-3 rounded-xl bg-slate-950/80 border border-slate-800 space-y-2 text-[10.5px]">
-                <div className="flex items-center gap-1.5 text-amber-400 font-bold">
-                  <HelpCircle className="w-3.5 h-3.5 text-amber-400 flex-shrink-0" />
-                  <span>Safe Memory Mode Guide:</span>
-                </div>
-                <div className="space-y-1.5 text-slate-300 leading-relaxed">
-                  <p>
-                    <strong className="text-amber-300">How it works:</strong> Introduces 60ms Garbage Collection breaks every 5 records and immediately destroys offscreen GPU canvas textures to prevent memory buildup.
-                  </p>
-                  <p>
-                    <strong className="text-emerald-400">When to ENABLE:</strong> Exporting large datasets (50+ items) on mobile phones, iPads/tablets, or low-RAM devices, or when exporting at Original (100% Native) quality.
-                  </p>
-                  <p>
-                    <strong className="text-slate-400">When to DISABLE:</strong> Exporting on high-spec Desktop PCs for up to 3x faster generation speed.
-                  </p>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Actions at the bottom */}
-          <div className="space-y-2 pt-2">
-            <button onClick={handleDownloadSinglePreview} disabled={!currentLayout} className="btn-secondary text-xs w-full justify-center disabled:opacity-40">
-              Download Preview PNG
-            </button>
-            <button
-              onClick={handleInitiateBatchZip}
-              disabled={layouts.length === 0 || rows.length === 0 || selectedRowIndices.size === 0 || localExportStatus.isExporting}
-              className="btn-gold text-sm w-full py-3 justify-center shadow-lg shadow-amber-500/20 disabled:opacity-40 font-bold flex items-center gap-2"
-            >
-              {localExportStatus.isExporting ? (
-                <>
-                  <Loader2 className="w-4 h-4 animate-spin text-slate-950" />
-                  <span>Generating ({localExportStatus.progress}/{localExportStatus.total})...</span>
-                </>
-              ) : (
-                <>
-                  <Download className="w-4 h-4" />
-                  <span>
-                    {selectedRowIndices.size === 0
-                      ? 'No Rows Selected'
-                      : `Generate Selected (${selectedRowIndices.size} ZIP)`}
-                  </span>
-                </>
               )}
-            </button>
+            </div>
+
+            {/* Dynamic Action Buttons Row: Dynamic Tags + Ranking Awards side-by-side */}
+            {selectedField && selectedField.type === 'text' && (
+              <div className="flex items-center justify-between gap-2 pt-1.5 border-t border-slate-800/80 flex-wrap">
+                {/* Left group: Dynamic Tags & Configure Ranking side-by-side! */}
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setIsDynamicTagsModalOpen(true)}
+                    className="px-3 py-1 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 text-xs font-mono font-bold text-amber-300 border border-amber-500/30 flex items-center gap-1.5 shadow-sm transition"
+                    title="Insert column tags and format template"
+                  >
+                    <Tag className="w-3.5 h-3.5 text-amber-400" /> 🏷️ Insert Dynamic Tag...
+                  </button>
+
+                  <button
+                    onClick={() => setIsRankingModalOpen(true)}
+                    className="px-3 py-1 rounded-xl bg-amber-500/20 hover:bg-amber-500/35 text-xs font-mono font-bold text-amber-300 border border-amber-500/40 flex items-center gap-1.5 shadow-sm transition"
+                    title="Configure score column and placement award schemes (1st, 2nd, Champion, etc.)"
+                  >
+                    <Trophy className="w-3.5 h-3.5 text-amber-400" /> 🏆 Configure Ranking & Awards
+                  </button>
+                </div>
+
+                {/* Right group: View Mode & Middle Initial toggle */}
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setStageViewMode((prev) => (prev === 'record' ? 'tags' : 'record'))}
+                    className={`px-3 py-1 rounded-xl text-xs font-mono font-bold border transition flex items-center gap-1.5 shadow-sm ${
+                      stageViewMode === 'tags'
+                        ? 'bg-indigo-500 text-slate-950 border-indigo-400 font-bold ring-2 ring-indigo-400/40'
+                        : 'bg-slate-950 text-slate-300 border-slate-800 hover:text-white'
+                    }`}
+                    title="Toggle between displaying raw dynamic tags vs evaluated record values on canvas"
+                  >
+                    {stageViewMode === 'tags' ? (
+                      <>
+                        <Tag className="w-3.5 h-3.5 text-slate-950" /> 🏷️ Tag Layout Mode
+                      </>
+                    ) : (
+                      <>
+                        <Eye className="w-3.5 h-3.5 text-indigo-400" /> 👤 Live Record Mode
+                      </>
+                    )}
+                  </button>
+
+                  <button
+                    onClick={handleToggleTagInitial}
+                    className="px-2.5 py-1 rounded-xl bg-indigo-500/15 hover:bg-indigo-500/25 text-xs font-mono font-bold text-indigo-300 border border-indigo-500/30 flex items-center gap-1 transition"
+                    title="Make selected tag Middle Initial ({middle_name} -> {middle_name_initial} -> M.)"
+                  >
+                    🔤 Make Initial (M.I.)
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Record Selector Header & Search */}
+          <div className="flex items-center justify-between flex-wrap gap-2 px-1">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-xs text-slate-400 font-medium">Live Preview Record:</span>
+              <select
+                value={previewRowIndex}
+                onChange={(e) => setPreviewRowIndex(Number(e.target.value))}
+                className="select-dark text-xs py-1 font-semibold text-amber-300 max-w-[260px]"
+              >
+                {filteredPreviewRows.map((r) => {
+                  const actualIdx = tabulatedRows.indexOf(r);
+                  const name = r.last_name && r.first_name
+                    ? `${r.last_name}, ${r.first_name}`
+                    : r.name || r.first_name || `Record #${actualIdx + 1}`;
+                  return (
+                    <option key={actualIdx} value={actualIdx}>
+                      #{actualIdx + 1}: {name}
+                    </option>
+                  );
+                })}
+              </select>
+
+              {/* Record Search Input */}
+              <div className="relative flex items-center">
+                <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 pointer-events-none z-10" />
+                <input
+                  type="text"
+                  placeholder="Search record..."
+                  value={rowSearchQuery}
+                  onChange={(e) => setRowSearchQuery(e.target.value)}
+                  className="input-dark py-1 text-xs w-44 font-mono text-slate-200"
+                  style={{ paddingLeft: '2.1rem' }}
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* MASSIVE CANVA-STYLE INTERACTIVE STAGE VIEWPORT */}
+          <div className="w-full glass-panel p-3 rounded-2xl overflow-hidden shadow-inner min-h-[520px] flex flex-col items-center justify-center">
+            <InteractiveStage
+              currentLayout={currentLayout}
+              selectedFieldId={selectedFieldId}
+              onSelectField={setSelectedFieldId}
+              onUpdateField={handleUpdateField}
+              previewRow={activePreviewRow}
+              stageViewMode={stageViewMode}
+              onToggleFullscreen={handleToggleFullscreen}
+              isFullscreen={isFullscreen}
+            />
           </div>
         </div>
       </div>
 
-      {/* Large Batch Safe Mode Advisory Modal */}
+      {/* Large Batch Advisory Modal */}
       {isLargeBatchModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-fade-in">
           <div className="bg-slate-900 border border-amber-500/40 w-full max-w-md rounded-2xl shadow-2xl overflow-hidden p-6 space-y-4">
@@ -1667,46 +1693,34 @@ export default function LayoutStudio({ onStartExport, setExportStatus, onProgres
                 <ShieldAlert className="w-6 h-6 text-amber-400" />
               </div>
               <div>
-                <h3 className="text-base font-bold text-white">Large Batch Optimization Advisory</h3>
+                <h3 className="text-base font-bold text-white">Large Batch Advisory</h3>
                 <p className="text-xs text-amber-300 font-medium">
-                  {(selectedRowIndices.size || rows.length).toLocaleString()} Certificates Selected
+                  {selectedRowIndices.size} Certificates Selected
                 </p>
               </div>
             </div>
 
             <p className="text-xs text-slate-300 leading-relaxed">
-              You are processing a large batch of <strong>{(selectedRowIndices.size || rows.length).toLocaleString()} certificates</strong>. 
-              Enabling <strong>Safe Memory Mode</strong> is recommended for batches over 100 items to prevent browser memory exhaustion and ensure 100% stable ZIP generation.
+              Enabling <strong>Safe Memory Mode</strong> is recommended for large exports to prevent memory exhaustion.
             </p>
 
-            <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 space-y-1.5 text-[11px]">
-              <div className="flex items-center justify-between text-amber-300 font-bold">
-                <span>Recommended Setup:</span>
-              </div>
-              <ul className="list-disc list-inside text-slate-400 space-y-1">
-                <li><strong>Safe Memory Mode:</strong> Enabled (Prevents memory leaks & crashes)</li>
-                <li><strong>ZIP Streaming:</strong> Fast STORE Mode Enabled</li>
-              </ul>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-2">
+            <div className="grid grid-cols-2 gap-2 pt-2">
               <button
                 onClick={() => {
                   setSafeMemoryMode(true);
                   setIsLargeBatchModalOpen(false);
                   setTimeout(() => handleGenerateBatchZip(), 50);
                 }}
-                className="btn-gold text-xs py-2.5 justify-center font-bold flex items-center gap-1.5 shadow-md shadow-amber-500/20"
+                className="btn-gold text-xs py-2.5 justify-center font-bold flex items-center gap-1.5"
               >
-                <ShieldCheck className="w-4 h-4 text-slate-950" />
-                <span>Enable Safe & Start</span>
+                <ShieldCheck className="w-4 h-4 text-slate-950" /> Enable Safe & Start
               </button>
               <button
                 onClick={() => {
                   setIsLargeBatchModalOpen(false);
                   setTimeout(() => handleGenerateBatchZip(), 50);
                 }}
-                className="btn-secondary text-xs py-2.5 justify-center text-slate-300 hover:text-white"
+                className="btn-secondary text-xs py-2.5 justify-center"
               >
                 Proceed Fast
               </button>
@@ -1714,6 +1728,77 @@ export default function LayoutStudio({ onStartExport, setExportStatus, onProgres
           </div>
         </div>
       )}
+
+      {/* Ranking & Awards Config Modal */}
+      <RankingConfigModal
+        isOpen={isRankingModalOpen}
+        onClose={() => setIsRankingModalOpen(false)}
+        headers={headers}
+        scoreColumn={scoreColumn}
+        setScoreColumn={setScoreColumn}
+        titleScheme={titleScheme}
+        setTitleScheme={setTitleScheme}
+        onApplyRanking={({ scoreColumn: sCol, titleScheme: tScheme, teamCount }) => {
+          if (sCol !== undefined) setScoreColumn(sCol);
+          if (tScheme !== undefined) setTitleScheme(tScheme);
+          handleSelectTopN(teamCount || 3);
+
+          if (currentLayoutId) {
+            saveSnapshot();
+            setLayouts((prevLayouts) =>
+              prevLayouts.map((l) => {
+                if (l.id !== currentLayoutId) return l;
+                return {
+                  ...l,
+                  fields: l.fields.map((f) => {
+                    const rawContent = (f.customTemplate || f.key || '').toLowerCase();
+                    const isRankField = f.id === selectedFieldId || f.enableTabulationTags || rawContent.includes('champion') || rawContent.includes('runner') || rawContent.includes('place');
+                    if (isRankField) {
+                      if (!rawContent.includes('{rank_title}') && !rawContent.includes('{_rank_title}') && !rawContent.includes('{placement}')) {
+                        return {
+                          ...f,
+                          isCustomMessage: true,
+                          customTemplate: '{rank_title}',
+                          key: 'rank_title',
+                          enableTabulationTags: true
+                        };
+                      }
+                    }
+                    return f;
+                  })
+                };
+              })
+            );
+          }
+        }}
+      />
+
+      {/* Dynamic Tag & Live Text Layout Modal */}
+      <DynamicTagModal
+        isOpen={isDynamicTagsModalOpen}
+        onClose={() => setIsDynamicTagsModalOpen(false)}
+        headers={headers}
+        initialTemplate={selectedField?.customTemplate || ''}
+        previewRow={activePreviewRow}
+        enableTabulationTags={Boolean(selectedField?.enableTabulationTags || scoreColumn)}
+        onApplyTemplate={(newTpl) => {
+          saveSnapshot();
+          handleUpdateField(selectedField.id, { customTemplate: newTpl });
+        }}
+      />
+
+      {/* Interactive Color Studio & Theories Modal */}
+      <ColorPickerModal
+        isOpen={isColorPickerOpen}
+        onClose={() => setIsColorPickerOpen(false)}
+        color={
+          (selectedField?.selectedTag && selectedField?.styledTags?.[selectedField.selectedTag]?.color) ||
+          selectedField?.color ||
+          '#FFFFFF'
+        }
+        onChange={handleColorChange}
+        bgImage={currentLayout?.image}
+      />
     </div>
   );
 }
