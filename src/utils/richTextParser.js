@@ -1,74 +1,123 @@
-// Rich Text Formatting Parser for Markdown-like inline styling
+// Rich Text Formatting Parser for Markdown & Inline styling (Canva & Word style)
 // Supported syntax:
 // ***bold & italic***
-// **bold**
-// *italic*
-// ~~strikethrough~~
+// **bold** or <b>bold</b> or <strong>bold</strong>
+// *italic* or <i>italic</i> or <em>italic</em>
+// ~~strikethrough~~ or <s>strikethrough</s> or <del>strikethrough</del>
 // <u>underline</u>
 
-export function parseRichTextTokens(rawText) {
+export function parseRichTextTokens(rawText, baseStyles = {}) {
   if (!rawText) return [];
   const text = String(rawText);
 
-  // Regex pattern for matching styled spans
-  // 1: ***bold italic***
-  // 2: **bold**
-  // 3: *italic*
-  // 4: ~~strikethrough~~
-  // 5: <u>underline</u>
-  const regex = /(\*\*\*(.*?)\*\*\*)|(\*\*(.*?)\*\*)|(\*(.*?)\*)|(~~(.*?)~~)|(<u>(.*?)<\/u>)/g;
+  const baseBold = Boolean(baseStyles.bold);
+  const baseItalic = Boolean(baseStyles.italic);
+  const baseStrike = Boolean(baseStyles.strike);
+  const baseUnderline = Boolean(baseStyles.underline);
+  const baseColor = baseStyles.color;
+
+  // Regex pattern matching styled spans (markdown & html)
+  // 1,2: ***bold italic***
+  // 3,4: **bold**
+  // 5,6: *italic*
+  // 7,8: ~~strike~~
+  // 9,10: <u>underline</u>
+  // 11,12: <b> or <strong>
+  // 13,14: <i> or <em>
+  // 15,16: <s> or <strike> or <del>
+  const regex = /(\*\*\*(.*?)\*\*\*)|(\*\*(.*?)\*\*)|(\*(.*?)\*)|(~~(.*?)~~)|(<u>(.*?)<\/u>)|(<(?:b|strong)>(.*?)<\/(?:b|strong)>)|(<(?:i|em)>(.*?)<\/(?:i|em)>)|(<(?:s|strike|del)>(.*?)<\/(?:s|strike|del)>)/gi;
 
   const tokens = [];
   let lastIndex = 0;
   let match;
 
   while ((match = regex.exec(text)) !== null) {
-    // Push preceding unstyled text
+    // Preceding unstyled text
     if (match.index > lastIndex) {
       tokens.push({
         text: text.slice(lastIndex, match.index),
-        bold: false,
-        italic: false,
-        strike: false,
-        underline: false
+        bold: baseBold,
+        italic: baseItalic,
+        strike: baseStrike,
+        underline: baseUnderline,
+        color: baseColor
       });
     }
 
+    let innerText = '';
+    const newStyles = {
+      bold: baseBold,
+      italic: baseItalic,
+      strike: baseStrike,
+      underline: baseUnderline,
+      color: baseColor
+    };
+
     if (match[1]) {
       // ***bold italic***
-      tokens.push({ text: match[2], bold: true, italic: true, strike: false, underline: false });
+      innerText = match[2];
+      newStyles.bold = true;
+      newStyles.italic = true;
     } else if (match[3]) {
       // **bold**
-      tokens.push({ text: match[4], bold: true, italic: false, strike: false, underline: false });
+      innerText = match[4];
+      newStyles.bold = true;
     } else if (match[5]) {
       // *italic*
-      tokens.push({ text: match[6], bold: false, italic: true, strike: false, underline: false });
+      innerText = match[6];
+      newStyles.italic = true;
     } else if (match[7]) {
-      // ~~strikethrough~~
-      tokens.push({ text: match[8], bold: false, italic: false, strike: true, underline: false });
+      // ~~strike~~
+      innerText = match[8];
+      newStyles.strike = true;
     } else if (match[9]) {
       // <u>underline</u>
-      tokens.push({ text: match[10], bold: false, italic: false, strike: false, underline: true });
+      innerText = match[10];
+      newStyles.underline = true;
+    } else if (match[11]) {
+      // <b> or <strong>
+      innerText = match[12];
+      newStyles.bold = true;
+    } else if (match[13]) {
+      // <i> or <em>
+      innerText = match[14];
+      newStyles.italic = true;
+    } else if (match[15]) {
+      // <s> or <strike> or <del>
+      innerText = match[16];
+      newStyles.strike = true;
+    }
+
+    // Recursively parse inner text in case of nested formatting (e.g. **<u>word</u>**)
+    const innerTokens = parseRichTextTokens(innerText, newStyles);
+    if (innerTokens.length > 0) {
+      tokens.push(...innerTokens);
+    } else {
+      tokens.push({
+        text: innerText,
+        ...newStyles
+      });
     }
 
     lastIndex = regex.lastIndex;
   }
 
-  // Push remaining unstyled text
+  // Trailing unstyled text
   if (lastIndex < text.length) {
     tokens.push({
       text: text.slice(lastIndex),
-      bold: false,
-      italic: false,
-      strike: false,
-      underline: false
+      bold: baseBold,
+      italic: baseItalic,
+      strike: baseStrike,
+      underline: baseUnderline,
+      color: baseColor
     });
   }
 
   return tokens;
 }
 
-// Strip markdown tags to measure raw string length/width
+// Strip markdown & HTML tags to measure raw string length/width
 export function stripRichTextFormatting(text) {
   if (!text) return '';
   return String(text)
@@ -76,17 +125,17 @@ export function stripRichTextFormatting(text) {
     .replace(/\*\*(.*?)\*\*/g, '$1')
     .replace(/\*(.*?)\*/g, '$1')
     .replace(/~~(.*?)~~/g, '$1')
-    .replace(/<u>(.*?)<\/u>/g, '$1');
+    .replace(/<\/?(?:u|b|strong|i|em|s|strike|del)(?:\s+[^>]*)?>/gi, '');
 }
 
-// Parse text into styled tokens based on styledTags dictionary
+// Parse text into styled tokens based on styledTags dictionary + inline markdown/HTML formatting
 export function parseStyledTextTokens(rawText, styledTags = {}, fieldDefaults = {}) {
   if (!rawText) return [];
   const text = String(rawText);
-  const baseBold = fieldDefaults.bold !== undefined ? fieldDefaults.bold : false;
-  const baseItalic = fieldDefaults.italic !== undefined ? fieldDefaults.italic : false;
-  const baseStrike = fieldDefaults.strike !== undefined ? fieldDefaults.strike : false;
-  const baseUnderline = fieldDefaults.underline !== undefined ? fieldDefaults.underline : false;
+  const baseBold = fieldDefaults.bold !== undefined ? Boolean(fieldDefaults.bold) : false;
+  const baseItalic = fieldDefaults.italic !== undefined ? Boolean(fieldDefaults.italic) : false;
+  const baseStrike = fieldDefaults.strike !== undefined ? Boolean(fieldDefaults.strike) : false;
+  const baseUnderline = fieldDefaults.underline !== undefined ? Boolean(fieldDefaults.underline) : false;
 
   // Extract all dynamic tags in curly braces (e.g. {first_name})
   const tagMatches = [];
@@ -101,7 +150,14 @@ export function parseStyledTextTokens(rawText, styledTags = {}, fieldDefaults = 
   const keys = Array.from(allKeysSet).filter((k) => k && text.includes(k));
 
   if (keys.length === 0) {
-    return [{ text, bold: baseBold, italic: baseItalic, strike: baseStrike, underline: baseUnderline }];
+    // Parse inline markdown/HTML formatting for entire text
+    return parseRichTextTokens(text, {
+      bold: baseBold,
+      italic: baseItalic,
+      strike: baseStrike,
+      underline: baseUnderline,
+      color: fieldDefaults.color
+    });
   }
 
   // Sort keys by length descending to match longest phrases/tags first
@@ -116,40 +172,69 @@ export function parseStyledTextTokens(rawText, styledTags = {}, fieldDefaults = 
 
   while ((match = regex.exec(text)) !== null) {
     if (match.index > lastIdx) {
-      tokens.push({
-        text: text.slice(lastIdx, match.index),
+      const sliceText = text.slice(lastIdx, match.index);
+      const subTokens = parseRichTextTokens(sliceText, {
         bold: baseBold,
         italic: baseItalic,
         strike: baseStrike,
-        underline: baseUnderline
+        underline: baseUnderline,
+        color: fieldDefaults.color
       });
+      tokens.push(...subTokens);
     }
 
     const matchedKey = match[0];
     const tagStyle = styledTags[matchedKey] || {};
 
-    tokens.push({
-      text: matchedKey,
-      keyName: matchedKey,
-      isTag: matchedKey.startsWith('{') && matchedKey.endsWith('}'),
-      bold: tagStyle.bold !== undefined ? tagStyle.bold : baseBold,
-      italic: tagStyle.italic !== undefined ? tagStyle.italic : baseItalic,
-      strike: tagStyle.strikethrough !== undefined ? tagStyle.strikethrough : baseStrike,
-      underline: tagStyle.underline !== undefined ? tagStyle.underline : baseUnderline,
-      color: tagStyle.color
+    const effectiveBold = tagStyle.bold !== undefined ? Boolean(tagStyle.bold) : baseBold;
+    const effectiveItalic = tagStyle.italic !== undefined ? Boolean(tagStyle.italic) : baseItalic;
+    const effectiveStrike = tagStyle.strikethrough !== undefined ? Boolean(tagStyle.strikethrough) : baseStrike;
+    const effectiveUnderline = tagStyle.underline !== undefined ? Boolean(tagStyle.underline) : baseUnderline;
+    const effectiveColor = tagStyle.color || fieldDefaults.color;
+
+    // Check if matched key contains inline markdown formatting
+    const tagSubTokens = parseRichTextTokens(matchedKey, {
+      bold: effectiveBold,
+      italic: effectiveItalic,
+      strike: effectiveStrike,
+      underline: effectiveUnderline,
+      color: effectiveColor
     });
+
+    if (tagSubTokens.length > 1) {
+      tagSubTokens.forEach((t) => {
+        tokens.push({
+          ...t,
+          keyName: matchedKey,
+          isTag: matchedKey.startsWith('{') && matchedKey.endsWith('}')
+        });
+      });
+    } else {
+      tokens.push({
+        text: matchedKey,
+        keyName: matchedKey,
+        isTag: matchedKey.startsWith('{') && matchedKey.endsWith('}'),
+        bold: effectiveBold,
+        italic: effectiveItalic,
+        strike: effectiveStrike,
+        underline: effectiveUnderline,
+        color: effectiveColor
+      });
+    }
 
     lastIdx = regex.lastIndex;
   }
 
   if (lastIdx < text.length) {
-    tokens.push({
-      text: text.slice(lastIdx),
+    const sliceText = text.slice(lastIdx);
+    const subTokens = parseRichTextTokens(sliceText, {
       bold: baseBold,
       italic: baseItalic,
       strike: baseStrike,
-      underline: baseUnderline
+      underline: baseUnderline,
+      color: fieldDefaults.color
     });
+    tokens.push(...subTokens);
   }
 
   return tokens;
@@ -163,7 +248,8 @@ export function getDOMLineBreaks(text, styledTags = {}, field = {}, maxW = 300) 
     bold: field.fontWeight === '700' || field.fontWeight === 'bold',
     italic: field.fontStyle === 'italic',
     strike: Boolean(field.strikethrough),
-    underline: Boolean(field.underline)
+    underline: Boolean(field.underline),
+    color: field.color
   });
 
   const container = document.createElement('div');

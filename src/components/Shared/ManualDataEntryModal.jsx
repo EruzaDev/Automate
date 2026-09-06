@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { X, Plus, Trash2, Check, FileSpreadsheet } from 'lucide-react';
+import FullscreenPortal from './FullscreenPortal';
 
 export default function ManualDataEntryModal({ isOpen, onClose, initialRecords, initialColumns, onSave }) {
   const [columns, setColumns] = useState(
@@ -55,7 +56,8 @@ export default function ManualDataEntryModal({ isOpen, onClose, initialRecords, 
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-md p-4 animate-fade-in">
+    <FullscreenPortal>
+      <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-md p-4 animate-fade-in">
       <div className="glass-panel-accent max-w-5xl w-full max-h-[85vh] flex flex-col overflow-hidden">
         {/* Modal Header */}
         <div className="p-4 border-b border-[var(--border-subtle)] flex items-center justify-between">
@@ -157,5 +159,6 @@ export default function ManualDataEntryModal({ isOpen, onClose, initialRecords, 
         </div>
       </div>
     </div>
+    </FullscreenPortal>
   );
 }

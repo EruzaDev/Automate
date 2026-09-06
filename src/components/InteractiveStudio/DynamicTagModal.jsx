@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Tag, X, Search, Trophy, Check, Eye, LayoutTemplate } from 'lucide-react';
 import { evaluateFieldText } from '../../utils/multiColumnEvaluator';
 import { stripRichTextFormatting } from '../../utils/richTextParser';
+import FullscreenPortal from '../Shared/FullscreenPortal';
 
 export default function DynamicTagModal({
   isOpen,
@@ -20,7 +21,8 @@ export default function DynamicTagModal({
 
   useEffect(() => {
     if (isOpen) {
-      setTemplateText(stripRichTextFormatting(initialTemplate || ''));
+      const raw = stripRichTextFormatting(initialTemplate || '');
+      setTemplateText((raw === 'Input text here...' || raw === 'Insert text here...') ? '' : raw);
     }
   }, [isOpen, initialTemplate]);
 
@@ -94,7 +96,8 @@ export default function DynamicTagModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 backdrop-blur-md p-4 animate-in fade-in duration-200">
+    <FullscreenPortal>
+      <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/80 backdrop-blur-md p-4 animate-in fade-in duration-200">
       <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-lg shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
         {/* Header */}
         <div className="flex items-center justify-between p-4 border-b border-slate-800 bg-slate-900/60">
@@ -129,7 +132,7 @@ export default function DynamicTagModal({
               ref={textareaRef}
               value={templateText}
               onChange={(e) => setTemplateText(e.target.value)}
-              placeholder="Click dynamic tags below or type text layout here..."
+              placeholder="Insert text here or click dynamic tags below..."
               rows={2}
               className="input-dark py-2 px-3 text-xs font-mono text-amber-300 w-full resize-none focus:ring-1 focus:ring-amber-500"
             />
@@ -282,5 +285,6 @@ export default function DynamicTagModal({
         </div>
       </div>
     </div>
+    </FullscreenPortal>
   );
 }

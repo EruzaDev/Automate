@@ -219,6 +219,35 @@ body {
   box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.25);
 }
 
+.toolbar-select {
+  background-color: #0f172a;
+  border: 1px solid rgba(51, 65, 85, 0.85);
+  color: #f8fafc;
+  height: 34px;
+  line-height: 32px;
+  padding: 0 26px 0 10px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  outline: none;
+  cursor: pointer;
+  appearance: auto;
+  box-sizing: border-box;
+  vertical-align: middle;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.toolbar-select:focus {
+  border-color: #f59e0b;
+  box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.25);
+}
+
+.toolbar-select option {
+  background-color: #0f172a;
+  color: #f8fafc;
+  padding: 6px 10px;
+}
+
 :root[data-theme="light"] select option {
   background-color: #ffffff;
   color: #0f172a;
@@ -342,7 +371,7 @@ body {
 /* Smooth Animations */
 @keyframes fadeIn {
   from { opacity: 0; transform: translateY(8px); }
-  to { opacity: 1; transform: translateY(0); }
+  to { opacity: 1; transform: none; }
 }
 
 .animate-fade-in {

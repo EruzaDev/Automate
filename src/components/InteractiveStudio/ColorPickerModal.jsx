@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Pipette, Sparkles, X, Check, Copy, Palette, Eye } from 'lucide-react';
 import { hexToHsl, hslToHex, extractImagePalette, generateColorTheories } from '../../utils/colorPaletteExtractor';
+import FullscreenPortal from '../Shared/FullscreenPortal';
 
 export default function ColorPickerModal({
   isOpen,
@@ -124,7 +125,8 @@ export default function ColorPickerModal({
   ];
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-fade-in">
+    <FullscreenPortal>
+      <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-fade-in">
       <div className="relative w-full max-w-md bg-slate-900 rounded-3xl border border-slate-800 shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800 bg-slate-950/60">
@@ -381,5 +383,6 @@ export default function ColorPickerModal({
         </div>
       </div>
     </div>
+    </FullscreenPortal>
   );
 }

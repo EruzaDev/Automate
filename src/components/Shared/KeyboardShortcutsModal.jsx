@@ -1,5 +1,6 @@
 import React from 'react';
 import { X, Keyboard, Command, Layout, Image as ImageIcon, FileSpreadsheet, Sparkles } from 'lucide-react';
+import FullscreenPortal from './FullscreenPortal';
 
 export default function KeyboardShortcutsModal({ isOpen, onClose }) {
   if (!isOpen) return null;
@@ -51,7 +52,8 @@ export default function KeyboardShortcutsModal({ isOpen, onClose }) {
   ];
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-md animate-fade-in">
+    <FullscreenPortal>
+      <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-md animate-fade-in">
       <div className="glass-panel w-full max-w-2xl overflow-hidden shadow-2xl border-indigo-500/30 flex flex-col max-h-[85vh] animate-scale-up">
         {/* Header */}
         <div className="p-4 sm:p-5 border-b border-slate-700/40 flex items-center justify-between bg-indigo-500/10">
@@ -117,5 +119,6 @@ export default function KeyboardShortcutsModal({ isOpen, onClose }) {
         </div>
       </div>
     </div>
+    </FullscreenPortal>
   );
 }

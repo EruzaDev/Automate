@@ -51,6 +51,9 @@ export async function renderRecordToCanvas(dataRow, layout, canvas, stageWidth =
 
     if (field.type === 'text') {
       const text = evaluateFieldText(field, dataRow);
+      if (!text || !text.trim() || text === 'Input text here...' || text === 'Insert text here...') {
+        return;
+      }
       const letterSpacing = (field.letterSpacing || 0) * scaleRatio;
       const wordSpacing = (field.wordSpacing || 0) * scaleRatio;
       const baseFontFamily = field.fontFamily || 'Georgia, serif';
@@ -152,12 +155,32 @@ export async function renderRecordToCanvas(dataRow, layout, canvas, stageWidth =
       const totalBlockHeight = lines.length * lineHeight;
       let startY = boxY + (boxH - totalBlockHeight) / 2 + lineHeight / 2;
 
-      for (const lineTokens of lines) {
+      for (let lIdx = 0; lIdx < lines.length; lIdx++) {
+        const lineTokens = lines[lIdx];
         const lineTotalWidth = lineTokens.reduce((sum, t) => sum + (t.width || 0), 0);
 
         let currentX = boxX + (boxW - lineTotalWidth) / 2;
-        if (field.align === 'left') { currentX = boxX + (4 * scaleRatio); }
-        if (field.align === 'right') { currentX = boxX + boxW - lineTotalWidth - (4 * scaleRatio); }
+        let wordExtraSpace = 0;
+
+        if (field.align === 'left') {
+          currentX = boxX + (4 * scaleRatio);
+        } else if (field.align === 'right') {
+          currentX = boxX + boxW - lineTotalWidth - (4 * scaleRatio);
+        } else if (field.align === 'justify') {
+          currentX = boxX + (4 * scaleRatio);
+          const isLastLine = lIdx === lines.length - 1 && lines.length > 1;
+          if (!isLastLine) {
+            let spaceCount = 0;
+            lineTokens.forEach((t) => {
+              const matches = (t.text || '').match(/ /g);
+              if (matches) spaceCount += matches.length;
+            });
+            const remainingSpace = (boxW - (8 * scaleRatio)) - lineTotalWidth;
+            if (spaceCount > 0 && remainingSpace > 0) {
+              wordExtraSpace = remainingSpace / spaceCount;
+            }
+          }
+        }
 
         for (const token of lineTokens) {
           let weight = baseFontWeight;
@@ -167,32 +190,69 @@ export async function renderRecordToCanvas(dataRow, layout, canvas, stageWidth =
           ctx.font = formatCanvasFont(style, weight, fontSize, baseFontFamily);
           ctx.fillStyle = token.color || field.color || '#ffffff';
           ctx.textAlign = 'left';
-          ctx.fillText(token.text, currentX, startY);
 
-          const tokenWidth = token.width !== undefined ? token.width : ctx.measureText(token.text).width;
+          if (wordExtraSpace > 0 && token.text && token.text.includes(' ')) {
+            const subWords = token.text.split(' ');
+            for (let wIdx = 0; wIdx < subWords.length; wIdx++) {
+              const subWord = subWords[wIdx];
+              if (subWord) {
+                ctx.fillText(subWord, currentX, startY);
+                const subWordW = ctx.measureText(subWord).width;
 
-          // Render Strikethrough
-          if (token.strike) {
-            ctx.beginPath();
-            ctx.lineWidth = Math.max(1 * scaleRatio, fontSize / 16);
-            ctx.strokeStyle = field.color || '#ffffff';
-            ctx.moveTo(currentX, startY);
-            ctx.lineTo(currentX + tokenWidth, startY);
-            ctx.stroke();
+                if (token.strike) {
+                  ctx.beginPath();
+                  ctx.lineWidth = Math.max(1 * scaleRatio, fontSize / 16);
+                  ctx.strokeStyle = field.color || '#ffffff';
+                  ctx.moveTo(currentX, startY);
+                  ctx.lineTo(currentX + subWordW, startY);
+                  ctx.stroke();
+                }
+
+                if (token.underline) {
+                  ctx.beginPath();
+                  ctx.lineWidth = Math.max(1 * scaleRatio, fontSize / 16);
+                  ctx.strokeStyle = field.color || '#ffffff';
+                  const underlineY = startY + fontSize * 0.4;
+                  ctx.moveTo(currentX, underlineY);
+                  ctx.lineTo(currentX + subWordW, underlineY);
+                  ctx.stroke();
+                }
+
+                currentX += subWordW;
+              }
+
+              if (wIdx < subWords.length - 1) {
+                const standardSpaceW = ctx.measureText(' ').width;
+                currentX += standardSpaceW + wordExtraSpace;
+              }
+            }
+          } else {
+            ctx.fillText(token.text, currentX, startY);
+            const tokenWidth = token.width !== undefined ? token.width : ctx.measureText(token.text).width;
+
+            // Render Strikethrough
+            if (token.strike) {
+              ctx.beginPath();
+              ctx.lineWidth = Math.max(1 * scaleRatio, fontSize / 16);
+              ctx.strokeStyle = field.color || '#ffffff';
+              ctx.moveTo(currentX, startY);
+              ctx.lineTo(currentX + tokenWidth, startY);
+              ctx.stroke();
+            }
+
+            // Render Underline
+            if (token.underline) {
+              ctx.beginPath();
+              ctx.lineWidth = Math.max(1 * scaleRatio, fontSize / 16);
+              ctx.strokeStyle = field.color || '#ffffff';
+              const underlineY = startY + fontSize * 0.4;
+              ctx.moveTo(currentX, underlineY);
+              ctx.lineTo(currentX + tokenWidth, underlineY);
+              ctx.stroke();
+            }
+
+            currentX += tokenWidth;
           }
-
-          // Render Underline
-          if (token.underline) {
-            ctx.beginPath();
-            ctx.lineWidth = Math.max(1 * scaleRatio, fontSize / 16);
-            ctx.strokeStyle = field.color || '#ffffff';
-            const underlineY = startY + fontSize * 0.4;
-            ctx.moveTo(currentX, underlineY);
-            ctx.lineTo(currentX + tokenWidth, underlineY);
-            ctx.stroke();
-          }
-
-          currentX += tokenWidth;
         }
 
         startY += lineHeight;

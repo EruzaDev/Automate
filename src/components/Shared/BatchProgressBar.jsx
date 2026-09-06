@@ -1,6 +1,7 @@
 import React, { useEffect } from 'react';
 import confetti from 'canvas-confetti';
 import { Loader2, CheckCircle2, Download, XCircle } from 'lucide-react';
+import FullscreenPortal from './FullscreenPortal';
 
 export default function BatchProgressBar({
   progress,
@@ -32,7 +33,8 @@ export default function BatchProgressBar({
   const currentPercent = isPacking ? zipPercent : renderPercentage;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-md p-4 animate-fade-in">
+    <FullscreenPortal>
+      <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/75 backdrop-blur-md p-4 animate-fade-in">
       <div className="glass-panel-accent p-6 max-w-md w-full text-center space-y-5 shadow-2xl">
         {isFinished ? (
           <>
@@ -114,5 +116,6 @@ export default function BatchProgressBar({
         )}
       </div>
     </div>
+    </FullscreenPortal>
   );
 }

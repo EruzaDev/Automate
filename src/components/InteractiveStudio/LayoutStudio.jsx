@@ -1,11 +1,12 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Layout, Plus, Trash2, FileSpreadsheet, Download, Type, QrCode, Sliders, ArrowUp, ArrowDown, FolderPlus, FolderTree, Bold, Italic, Strikethrough, Underline, MessageSquare, Search, Table, Eye, CheckCircle, Loader2, CheckSquare, Square, HelpCircle, ShieldAlert, ShieldCheck, Trophy, Award, Edit3, Check, Settings, Layers, Sparkles, Filter, Medal, Tag, ChevronDown, ChevronUp, Palette, AlignLeft, AlignCenter, AlignRight, RotateCcw, RotateCw, WholeWord, Sparkle, WrapText } from 'lucide-react';
+import { Layout, Plus, Trash2, FileSpreadsheet, Download, Type, QrCode, Sliders, ArrowUp, ArrowDown, FolderPlus, FolderTree, Bold, Italic, Strikethrough, Underline, MessageSquare, Search, Table, Eye, CheckCircle, Loader2, CheckSquare, Square, HelpCircle, ShieldAlert, ShieldCheck, Trophy, Award, Edit3, Check, Settings, Layers, Sparkles, Filter, Medal, Tag, ChevronDown, ChevronUp, Palette, AlignLeft, AlignCenter, AlignRight, AlignJustify, AlignCenterHorizontal, AlignCenterVertical, RotateCcw, RotateCw, WholeWord, Sparkle, WrapText, Copy, Magnet, FileText } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import InteractiveStage from './InteractiveStage';
 import CSVDataEditorModal from '../Shared/CSVDataEditorModal';
 import RankingConfigModal from './RankingConfigModal';
 import DynamicTagModal from './DynamicTagModal';
 import ColorPickerModal from './ColorPickerModal';
+import FullscreenPortal from '../Shared/FullscreenPortal';
 import { renderRecordToCanvas, exportLayoutsToZip } from '../../utils/batchRenderer';
 import { loadCustomFontFile, getLoadedCustomFonts } from '../../utils/fontLoader';
 import { tabulateRows, detectScoreColumns, getPlacementTitle } from '../../utils/tabulationEngine';
@@ -21,6 +22,15 @@ export default function LayoutStudio({ onStartExport, setExportStatus, onProgres
   // History Undo/Redo Stack State (Ctrl+Z / Ctrl+Y)
   const [historyStack, setHistoryStack] = useState([]);
   const [redoStack, setRedoStack] = useState([]);
+
+  // Snapping State (Synchronized with Canvas)
+  const [isSnappingEnabled, setIsSnappingEnabled] = useState(true);
+
+  // Active Text Selection for Canva/Word-style sub-word & substring formatting
+  const [activeTextSelection, setActiveTextSelection] = useState(null);
+
+  // Fullscreen Slide-Over Panels: 'layers' | 'fonts' | 'records' | null
+  const [fullscreenPanel, setFullscreenPanel] = useState(null);
 
   // Modal Dialogs State
   const [isRankingModalOpen, setIsRankingModalOpen] = useState(false);
@@ -217,7 +227,8 @@ export default function LayoutStudio({ onStartExport, setExportStatus, onProgres
   }, [layouts, onProgressChange]);
 
   const currentLayout = layouts.find((l) => l.id === currentLayoutId) || null;
-  const selectedField = currentLayout?.fields.find((f) => f.id === selectedFieldId) || null;
+  const selectedField = currentLayout?.fields?.find((f) => f.id === selectedFieldId) || null;
+  const activeField = selectedField || (currentLayout?.fields?.find((f) => f.type === 'text') || currentLayout?.fields?.[0] || null);
   const headers = rows.length > 0 ? Object.keys(rows[0]) : ['first_name', 'middle_name', 'last_name', 'Section', 'Course', 'qr_data'];
   const activePreviewRow = React.useMemo(() => {
     const base = tabulatedRows[previewRowIndex] || tabulatedRows[0] || {};
@@ -351,7 +362,7 @@ export default function LayoutStudio({ onStartExport, setExportStatus, onProgres
       type: 'text',
       key: 'custom_text',
       isCustomMessage: true,
-      customTemplate: 'Input text here...',
+      customTemplate: '',
       isMultiColumn: false,
       columns: [],
       separator: ' ',
@@ -452,11 +463,35 @@ export default function LayoutStudio({ onStartExport, setExportStatus, onProgres
     if (selectedFieldId === fieldId) setSelectedFieldId(null);
   };
 
-  // Toggle middle_name tag specifically to middle_name_initial
-  const handleToggleTagInitial = () => {
-    if (!selectedField || selectedField.type !== 'text') return;
+  const handleDuplicateField = (fieldId) => {
+    if (!currentLayout) return;
+    const target = currentLayout.fields.find((f) => f.id === fieldId) || selectedField;
+    if (!target) return;
     saveSnapshot();
-    const tpl = selectedField.customTemplate || '';
+    const duplicated = {
+      ...JSON.parse(JSON.stringify(target)),
+      id: `f-${Date.now()}`,
+      name: `${target.name || 'Field'} (Copy)`,
+      xPct: Math.min(0.8, (target.xPct || 0.2) + 0.03),
+      yPct: Math.min(0.8, (target.yPct || 0.2) + 0.04)
+    };
+    setLayouts((prev) =>
+      prev.map((l) => {
+        if (l.id === currentLayoutId) {
+          return { ...l, fields: [...l.fields, duplicated] };
+        }
+        return l;
+      })
+    );
+    setSelectedFieldId(duplicated.id);
+  };
+
+  // Toggle middle_name tag specifically to middle_name_initial
+  const handleToggleTagInitial = (targetField = null) => {
+    const field = targetField || selectedField || activeField;
+    if (!field || field.type !== 'text') return;
+    saveSnapshot();
+    const tpl = field.customTemplate || '';
 
     let updatedTpl = tpl;
     if (tpl.toLowerCase().includes('{middle_name_initial}')) {
@@ -479,7 +514,7 @@ export default function LayoutStudio({ onStartExport, setExportStatus, onProgres
       }
     }
 
-    handleUpdateField(selectedField.id, { customTemplate: updatedTpl });
+    handleUpdateField(field.id, { customTemplate: updatedTpl });
   };
 
   const lastSelectionRef = useRef(null);
@@ -498,83 +533,147 @@ export default function LayoutStudio({ onStartExport, setExportStatus, onProgres
     }
   };
 
-  // Toggle style (Bold, Italic, Strikethrough, Underline) on field properties, highlighted text range, or customTemplate tags
-  const handleApplyInlineStyle = (styleType) => {
-    if (!selectedField || selectedField.type !== 'text') return;
+  // Toggle style (Bold, Italic, Strikethrough, Underline) on exact text selection (sub-word/word/phrase) or whole field
+  const handleApplyInlineStyle = (styleType, targetField = null) => {
+    const field = targetField || selectedField || activeField;
+    if (!field || field.type !== 'text') return;
     saveSnapshot();
 
-    const activeEl = document.activeElement;
-    let targetKey = selectedField.selectedTag;
+    const fullText = field.isCustomMessage
+      ? (field.customTemplate !== undefined ? field.customTemplate : '')
+      : (field.key || '');
 
-    if (activeEl && (activeEl.tagName === 'TEXTAREA' || activeEl.tagName === 'INPUT') && activeEl.selectionStart !== activeEl.selectionEnd) {
-      const start = activeEl.selectionStart;
-      const end = activeEl.selectionEnd;
-      targetKey = activeEl.value.slice(start, end).trim();
-    } else if (lastSelectionRef.current && lastSelectionRef.current.fieldId === selectedField.id && lastSelectionRef.current.text) {
-      targetKey = lastSelectionRef.current.text;
+    let selStart = -1;
+    let selEnd = -1;
+    let selText = '';
+    let textareaEl = null;
+
+    if (activeTextSelection && activeTextSelection.fieldId === field.id) {
+      selStart = activeTextSelection.start !== undefined ? activeTextSelection.start : -1;
+      selEnd = activeTextSelection.end !== undefined ? activeTextSelection.end : -1;
+      selText = activeTextSelection.text || '';
+      textareaEl = activeTextSelection.textareaRef || null;
+    } else if (lastSelectionRef.current && lastSelectionRef.current.fieldId === field.id && lastSelectionRef.current.text) {
+      selText = lastSelectionRef.current.text;
     }
 
-    const currentStyledTags = selectedField.styledTags || {};
-    const fieldIsBold = selectedField.fontWeight === '700' || selectedField.fontWeight === 'bold';
-    const fieldIsItalic = selectedField.fontStyle === 'italic';
-    const fieldIsStrike = Boolean(selectedField.strikethrough);
-    const fieldIsUnderline = Boolean(selectedField.underline);
+    // Delimiters for markdown formatting
+    let openTag = '**';
+    let closeTag = '**';
+    if (styleType === 'italic') { openTag = '*'; closeTag = '*'; }
+    else if (styleType === 'underline') { openTag = '<u>'; closeTag = '</u>'; }
+    else if (styleType === 'strikethrough') { openTag = '~~'; closeTag = '~~'; }
 
-    if (targetKey) {
-      // Toggle style on the specific selected tag or highlighted phrase ONLY
-      const existingTagStyle = currentStyledTags[targetKey] || {};
+    // Case 1: In-Place Textarea Selection with valid index range (even inside a word!)
+    if (selStart >= 0 && selEnd > selStart) {
+      const selectedChunk = fullText.slice(selStart, selEnd);
+      let replacement = '';
+      let newFullText = '';
+      let newSelStart = selStart;
+      let newSelEnd = selEnd;
 
-      let fieldIsActive = false;
-      if (styleType === 'bold') fieldIsActive = fieldIsBold;
-      else if (styleType === 'italic') fieldIsActive = fieldIsItalic;
-      else if (styleType === 'strikethrough') fieldIsActive = fieldIsStrike;
-      else if (styleType === 'underline') fieldIsActive = fieldIsUnderline;
+      // Check if the selected chunk itself is wrapped in the tags
+      if (selectedChunk.startsWith(openTag) && selectedChunk.endsWith(closeTag) && selectedChunk.length >= openTag.length + closeTag.length) {
+        // Unwrap inner
+        replacement = selectedChunk.slice(openTag.length, selectedChunk.length - closeTag.length);
+        newFullText = fullText.slice(0, selStart) + replacement + fullText.slice(selEnd);
+        newSelEnd = selStart + replacement.length;
+      }
+      // Check if surrounding text right outside selection is wrapped in the tags
+      else if (
+        selStart >= openTag.length &&
+        fullText.slice(selStart - openTag.length, selStart) === openTag &&
+        fullText.slice(selEnd, selEnd + closeTag.length) === closeTag
+      ) {
+        // Unwrap outer
+        replacement = selectedChunk;
+        newFullText = fullText.slice(0, selStart - openTag.length) + replacement + fullText.slice(selEnd + closeTag.length);
+        newSelStart = selStart - openTag.length;
+        newSelEnd = newSelStart + replacement.length;
+      }
+      // Otherwise wrap with formatting
+      else {
+        replacement = `${openTag}${selectedChunk}${closeTag}`;
+        newFullText = fullText.slice(0, selStart) + replacement + fullText.slice(selEnd);
+        newSelEnd = selStart + replacement.length;
+      }
 
-      const currentVal = existingTagStyle[styleType] !== undefined ? existingTagStyle[styleType] : fieldIsActive;
+      if (field.isCustomMessage) {
+        handleUpdateField(field.id, { customTemplate: newFullText });
+      } else {
+        handleUpdateField(field.id, { key: newFullText });
+      }
 
-      const newTagStyle = {
-        ...existingTagStyle,
-        [styleType]: !currentVal
-      };
+      if (textareaEl) {
+        setTimeout(() => {
+          try {
+            textareaEl.focus();
+            textareaEl.setSelectionRange(newSelStart, newSelEnd);
+          } catch (e) {}
+        }, 10);
+      }
 
-      handleUpdateField(selectedField.id, {
-        selectedTag: targetKey,
-        styledTags: {
-          ...currentStyledTags,
-          [targetKey]: newTagStyle
-        }
+      setActiveTextSelection({
+        fieldId: field.id,
+        start: newSelStart,
+        end: newSelEnd,
+        text: replacement,
+        fullText: newFullText,
+        textareaRef: textareaEl
       });
+      return;
+    }
+
+    // Case 2: Selection from Canvas Text (e.g. mouse drag on canvas span)
+    if (selText && fullText.includes(selText)) {
+      const wrappedPattern = `${openTag}${selText}${closeTag}`;
+      let newFullText = '';
+
+      if (fullText.includes(wrappedPattern)) {
+        // Already wrapped -> toggle off by unwrapping
+        newFullText = fullText.replace(wrappedPattern, selText);
+      } else {
+        // Wrap target substring with formatting
+        newFullText = fullText.replace(selText, wrappedPattern);
+      }
+
+      if (field.isCustomMessage) {
+        handleUpdateField(field.id, { customTemplate: newFullText });
+      } else {
+        handleUpdateField(field.id, { key: newFullText });
+      }
+
+      setActiveTextSelection(null);
       lastSelectionRef.current = null;
-    } else {
-      // Toggle style on the WHOLE field & clear tag-specific overrides for this styleType
-      const updatedStyledTags = { ...currentStyledTags };
-      Object.keys(updatedStyledTags).forEach((tagKey) => {
-        if (updatedStyledTags[tagKey]) {
-          const { [styleType]: _removed, ...rest } = updatedStyledTags[tagKey];
-          updatedStyledTags[tagKey] = rest;
-        }
-      });
-
-      const updates = { styledTags: updatedStyledTags };
-      if (styleType === 'bold') updates.fontWeight = fieldIsBold ? '400' : '700';
-      else if (styleType === 'italic') updates.fontStyle = fieldIsItalic ? 'normal' : 'italic';
-      else if (styleType === 'strikethrough') updates.strikethrough = !fieldIsStrike;
-      else if (styleType === 'underline') updates.underline = !fieldIsUnderline;
-
-      handleUpdateField(selectedField.id, updates);
+      return;
     }
+
+    // Case 3: Whole-Field Base Toggle (when no specific text range is selected)
+    const fieldIsBold = field.fontWeight === '700' || field.fontWeight === 'bold';
+    const fieldIsItalic = field.fontStyle === 'italic';
+    const fieldIsStrike = Boolean(field.strikethrough);
+    const fieldIsUnderline = Boolean(field.underline);
+
+    const updates = {};
+    if (styleType === 'bold') updates.fontWeight = fieldIsBold ? '400' : '700';
+    else if (styleType === 'italic') updates.fontStyle = fieldIsItalic ? 'normal' : 'italic';
+    else if (styleType === 'strikethrough') updates.strikethrough = !fieldIsStrike;
+    else if (styleType === 'underline') updates.underline = !fieldIsUnderline;
+
+    handleUpdateField(field.id, updates);
   };
 
   const handleColorChange = (newColor) => {
-    if (!selectedField) return;
+    const target = selectedField || activeField;
+    if (!target) return;
 
-    const activeTagKey = selectedField.selectedTag;
-    const currentStyledTags = selectedField.styledTags || {};
+    const activeTagKey = target.selectedTag;
+    const currentStyledTags = target.styledTags || {};
 
     if (activeTagKey) {
       // A specific tag or word range is selected: update color ONLY for this tag/word
       const tagStyle = currentStyledTags[activeTagKey] || {};
-      handleUpdateField(selectedField.id, {
+      handleUpdateField(target.id, {
         styledTags: {
           ...currentStyledTags,
           [activeTagKey]: { ...tagStyle, color: newColor }
@@ -591,7 +690,7 @@ export default function LayoutStudio({ onStartExport, setExportStatus, onProgres
         }
       });
 
-      handleUpdateField(selectedField.id, {
+      handleUpdateField(target.id, {
         color: newColor,
         styledTags: updatedStyledTags
       });
@@ -819,215 +918,6 @@ export default function LayoutStudio({ onStartExport, setExportStatus, onProgres
 
   return (
     <div className="space-y-4 animate-fade-in relative">
-      {/* CSV Data Table Editor Modal */}
-      <CSVDataEditorModal
-        isOpen={isDataEditorOpen}
-        onClose={() => setIsDataEditorOpen(false)}
-        rows={rows}
-        onSaveRows={(updatedRows) => {
-          setRows(updatedRows);
-          setSelectedRowIndices(new Set(updatedRows.map((_, i) => i)));
-          if (previewRowIndex >= updatedRows.length) setPreviewRowIndex(0);
-        }}
-        selectedRowIndices={selectedRowIndices}
-        onToggleSelectRow={handleToggleRowSelection}
-        onSelectAll={handleSelectAllRows}
-        onDeselectAll={handleDeselectAllRows}
-      />
-
-      {/* EXPORT SETTINGS & HIERARCHY MODAL */}
-      {isExportSettingsModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-fade-in">
-          <div className="bg-slate-900 border border-amber-500/40 w-full max-w-2xl rounded-3xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
-            
-            {/* Modal Header */}
-            <div className="px-6 py-4 border-b border-slate-800 bg-slate-950/60 flex items-center justify-between">
-              <div className="flex items-center gap-2.5">
-                <div className="w-9 h-9 rounded-2xl bg-amber-500/20 text-amber-400 border border-amber-500/30 flex items-center justify-center">
-                  <Download className="w-5 h-5" />
-                </div>
-                <div>
-                  <h3 className="font-bold text-base text-white">Batch Export Settings</h3>
-                  <p className="text-xs text-slate-400">Configure resolution, batch chunking, and folder hierarchy before downloading.</p>
-                </div>
-              </div>
-              <button
-                onClick={() => setIsExportSettingsModalOpen(false)}
-                className="text-slate-400 hover:text-white p-1 rounded-lg transition-colors font-bold text-base"
-              >
-                ✕
-              </button>
-            </div>
-
-            {/* Modal Content / Form Options */}
-            <div className="p-6 overflow-y-auto space-y-5 flex-1">
-              
-              {/* SECTION 1: QUALITY & RESOLUTION */}
-              <div className="glass-panel p-4 space-y-3 border-slate-800">
-                <h4 className="text-xs font-bold text-amber-300 uppercase tracking-wider flex items-center gap-1.5">
-                  <Sparkles className="w-4 h-4 text-amber-400" /> Quality & Canvas Resolution Settings
-                </h4>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <div>
-                    <label className="text-xs font-medium text-slate-300 block mb-1">Export File Format:</label>
-                    <select
-                      value={exportFormat}
-                      onChange={(e) => setExportFormat(e.target.value)}
-                      className="select-dark text-xs w-full py-1.5 font-mono"
-                    >
-                      <option value="png">PNG (High Definition / Lossless)</option>
-                      <option value="jpeg">JPEG (Compressed / Smaller Zip)</option>
-                    </select>
-                  </div>
-
-                  <div>
-                    <label className="text-xs font-medium text-slate-300 block mb-1">Canvas Resolution Scale:</label>
-                    <select
-                      value={exportResolution}
-                      onChange={(e) => setExportResolution(Number(e.target.value))}
-                      className="select-dark text-xs w-full py-1.5 font-mono"
-                    >
-                      <option value={2560}>🌟 2560px Max (Ultra HD / Print Quality)</option>
-                      <option value={1920}>⚡ 1920px Max (Standard HD / Fast)</option>
-                      <option value={1280}>🛡️ 1280px Max (Compact / Mobile Safe)</option>
-                    </select>
-                  </div>
-                </div>
-              </div>
-
-              {/* SECTION 2: BATCH CHUNKING (PER 100 RECORDS) */}
-              <div className="glass-panel p-4 space-y-3 border-indigo-500/30">
-                <div className="flex items-center justify-between">
-                  <h4 className="text-xs font-bold text-indigo-300 uppercase tracking-wider flex items-center gap-1.5">
-                    <Layers className="w-4 h-4 text-indigo-400" /> Batch Chunking (ZIP Volumes)
-                  </h4>
-                  <span className="text-[11px] font-mono text-amber-300 font-bold bg-amber-500/10 px-2.5 py-0.5 rounded border border-amber-500/20">
-                    {Math.ceil(selectedRowIndices.size / exportBatchChunkSize)} ZIP Volume(s)
-                  </span>
-                </div>
-                <div>
-                  <label className="text-xs font-medium text-slate-300 block mb-1">Items Per ZIP Volume:</label>
-                  <select
-                    value={exportBatchChunkSize}
-                    onChange={(e) => setExportBatchChunkSize(Number(e.target.value))}
-                    className="select-dark text-xs w-full py-1.5 font-mono"
-                  >
-                    <option value={100}>100 Items Per ZIP (Default / Balanced RAM)</option>
-                    <option value={50}>50 Items Per ZIP (High Reliability for Low RAM)</option>
-                    <option value={200}>200 Items Per ZIP (Faster Single Download)</option>
-                    <option value={500}>500 Items Per ZIP (Large Single ZIP Volume)</option>
-                  </select>
-                  <p className="text-[11px] text-slate-400 mt-1.5">
-                    Splitting generation into chunks of {exportBatchChunkSize} records prevents browser tab memory freezes and allows continuous background downloads.
-                  </p>
-                </div>
-              </div>
-
-              {/* SECTION 3: HIERARCHICAL FOLDER SORTING ({program} {year} {section}) */}
-              <div className="glass-panel p-4 space-y-3.5 border-emerald-500/30">
-                <div className="flex items-center justify-between">
-                  <h4 className="text-xs font-bold text-emerald-300 uppercase tracking-wider flex items-center gap-1.5">
-                    <FolderTree className="w-4 h-4 text-emerald-400" /> Hierarchical Folder Organization
-                  </h4>
-                </div>
-
-                <p className="text-xs text-slate-300">
-                  Select CSV columns to organize exported certificates into sub-folders based on hierarchy (e.g., <span className="text-amber-300 font-mono font-bold">Program</span>, <span className="text-amber-300 font-mono font-bold">Year</span>, and <span className="text-amber-300 font-mono font-bold">Section</span>):
-                </p>
-
-                {/* Column Header Selection Pills */}
-                <div className="flex flex-wrap gap-1.5 max-h-32 overflow-y-auto p-2 bg-slate-950/80 rounded-xl border border-slate-800">
-                  {headers.filter(h => !h.startsWith('_')).map((col) => {
-                    const isSelected = exportHierarchyColumns.includes(col);
-                    return (
-                      <button
-                        key={col}
-                        onClick={() => {
-                          if (isSelected) {
-                            setExportHierarchyColumns(exportHierarchyColumns.filter(c => c !== col));
-                          } else {
-                            setExportHierarchyColumns([...exportHierarchyColumns, col]);
-                          }
-                        }}
-                        className={`px-2.5 py-1 rounded-lg text-xs font-mono font-bold transition flex items-center gap-1 border ${
-                          isSelected
-                            ? 'bg-emerald-500 text-slate-950 border-emerald-400 shadow-sm'
-                            : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-white'
-                        }`}
-                      >
-                        {isSelected ? '✓ ' : '+ '} {col}
-                      </button>
-                    );
-                  })}
-                </div>
-
-                {/* Hierarchy Folder Path Preview */}
-                {exportHierarchyColumns.length > 0 && (
-                  <div className="p-3 bg-slate-950 rounded-xl border border-emerald-500/30 text-xs space-y-1.5">
-                    <span className="text-slate-400 font-mono text-[10px] uppercase font-bold block">Target Folder Path:</span>
-                    <div className="flex items-center gap-2 font-mono text-emerald-300 font-bold">
-                      <FolderPlus className="w-4 h-4 text-emerald-400 flex-shrink-0" />
-                      <span>
-                        {exportFolderMode === 'combined'
-                          ? `{ ${exportHierarchyColumns.join(' ')} } / Certificate.png`
-                          : `${exportHierarchyColumns.join(' / ')} / Certificate.png`}
-                      </span>
-                    </div>
-                  </div>
-                )}
-
-                {/* Hierarchy Sort & Mode Toggles */}
-                <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 pt-1 border-t border-slate-800">
-                  <label className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={exportSortByHierarchy}
-                      onChange={(e) => setExportSortByHierarchy(e.target.checked)}
-                      className="rounded bg-slate-950 border-slate-700 text-amber-500 focus:ring-0"
-                    />
-                    <span>Sort records by Hierarchy before export</span>
-                  </label>
-
-                  <div className="flex items-center gap-2 text-xs">
-                    <span className="text-slate-400">Folder Style:</span>
-                    <select
-                      value={exportFolderMode}
-                      onChange={(e) => setExportFolderMode(e.target.value)}
-                      className="select-dark text-xs py-0.5 px-2 font-mono"
-                    >
-                      <option value="combined">Combined Folder Name ({exportHierarchyColumns.join(' ') || 'Program Year Sec'})</option>
-                      <option value="nested">Nested Subfolders (Program / Year / Section)</option>
-                    </select>
-                  </div>
-                </div>
-              </div>
-
-            </div>
-
-            {/* Modal Actions */}
-            <div className="px-6 py-4 border-t border-slate-800 bg-slate-950/80 flex items-center justify-end gap-3">
-              <button
-                onClick={() => setIsExportSettingsModalOpen(false)}
-                className="btn-secondary text-xs py-2 px-4 font-bold"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={() => {
-                  setIsExportSettingsModalOpen(false);
-                  executeBatchZipExport();
-                }}
-                className="btn-gold text-xs py-2 px-5 font-bold shadow-lg shadow-amber-500/20 flex items-center gap-2"
-              >
-                <Download className="w-4 h-4 text-slate-950" />
-                <span>Start Batch Export ({selectedRowIndices.size} Records)</span>
-              </button>
-            </div>
-
-          </div>
-        </div>
-      )}
-
       {/* Clean Top Header Bar */}
       <div className="glass-panel p-3.5 flex items-center justify-between border-amber-500/30">
         <div className="flex items-center gap-3">
@@ -1322,354 +1212,692 @@ export default function LayoutStudio({ onStartExport, setExportStatus, onProgres
         {/* CENTER / MAIN WORKSPACE (9 COLS): CANVA-STYLE TOP TOOLBAR & BIG STAGE */}
         <div
           ref={studioWorkspaceRef}
-          className={`lg:col-span-9 space-y-3 transition-all ${
-            isFullscreen ? 'fixed inset-0 z-50 bg-slate-950 p-4 overflow-y-auto shadow-2xl' : ''
+          className={`transition-all ${
+            isFullscreen
+              ? 'fixed inset-0 z-50 bg-slate-950 flex flex-col h-screen w-screen overflow-hidden p-0 m-0'
+              : 'lg:col-span-9 space-y-3'
           }`}
         >
           
-          {/* CANVA-STYLE TOP FLOATING TOOLBAR */}
-          <div className="glass-panel p-2.5 space-y-2 border-amber-500/30 sticky top-16 z-30 shadow-xl">
-            <div className="flex items-center justify-between flex-wrap gap-2">
-              
-              {/* Selected Field Label / Type */}
-              <div className="flex items-center gap-2">
-                <span className="text-xs font-bold text-amber-300 flex items-center gap-1">
-                  <Sliders className="w-3.5 h-3.5 text-amber-400" />
-                  {selectedField ? (selectedField.name || selectedField.type.toUpperCase()) : 'Select Box on Stage'}
-                </span>
+          {/* CANVA-STYLE TOP FLOATING TOOLBAR (Categorized, Zero Sideways Scrolling, Non-Repetitive) */}
+          <div className={`glass-panel border-amber-500/30 flex-shrink-0 z-30 shadow-xl transition-all ${
+            isFullscreen
+              ? 'sticky top-0 rounded-none border-x-0 border-t-0 p-2 space-y-1.5 bg-slate-950/95 backdrop-blur-md'
+              : 'sticky top-16 p-2.5 space-y-2 rounded-2xl'
+          }`}>
+            {/* ROW 1: Typography, Inline Formatting, Alignment, Casing & Color (Zero Horizontal Scroll Ribbon) */}
+            <div className="flex items-center gap-1.5 flex-wrap">
+              {/* Category 1: Font & Size */}
+              <div className="flex items-center gap-1 flex-shrink-0">
+                {/* Font Family Dropdown */}
+                <select
+                  value={activeField?.fontFamily || 'Georgia, serif'}
+                  onChange={(e) => {
+                    if (activeField) {
+                      if (!selectedFieldId) setSelectedFieldId(activeField.id);
+                      handleUpdateField(activeField.id, { fontFamily: e.target.value });
+                    }
+                  }}
+                  disabled={!activeField || activeField.type !== 'text'}
+                  className="toolbar-select font-semibold text-slate-100 w-36 flex-shrink-0"
+                  title="Font Family"
+                >
+                  {customFonts.length > 0 && (
+                    <optgroup label="Custom Uploaded Fonts">
+                      {customFonts.map((cf) => (
+                        <option key={cf.name} value={cf.family}>{cf.displayName}</option>
+                      ))}
+                    </optgroup>
+                  )}
+                  <optgroup label="Standard Fonts">
+                    <option value="Georgia, serif">Georgia (Serif)</option>
+                    <option value="Playfair Display, serif">Playfair Display</option>
+                    <option value="Cinzel, serif">Cinzel (Luxury Serif)</option>
+                    <option value="Plus Jakarta Sans, sans-serif">Plus Jakarta Sans</option>
+                    <option value="Inter, sans-serif">Inter (Sans)</option>
+                  </optgroup>
+                </select>
+
+                {/* Font Size Input */}
+                <div
+                  className="h-[34px] flex items-center gap-1 bg-slate-900 px-2 rounded-lg border border-slate-700/80 flex-shrink-0"
+                  title="Font Size (px)"
+                >
+                  <span className="text-[10.5px] text-slate-400 font-bold uppercase">Size:</span>
+                  <input
+                    type="number"
+                    min="8"
+                    max="240"
+                    value={activeField?.fontSize || 36}
+                    onChange={(e) => {
+                      if (activeField) {
+                        if (!selectedFieldId) setSelectedFieldId(activeField.id);
+                        handleUpdateField(activeField.id, { fontSize: Number(e.target.value) });
+                      }
+                    }}
+                    disabled={!activeField || activeField.type !== 'text'}
+                    className="w-8 bg-transparent text-xs font-bold font-mono text-center text-amber-300 focus:outline-none focus:bg-slate-800/80 rounded"
+                  />
+                  <span className="text-[9.5px] text-slate-500 font-mono">px</span>
+                </div>
+
+                {/* Letter Spacing Input */}
+                <div
+                  className="h-[34px] flex items-center gap-1 bg-slate-900 px-2 rounded-lg border border-slate-700/80 flex-shrink-0"
+                  title="Letter Spacing (px)"
+                >
+                  <span className="text-[10.5px] text-slate-400 font-bold uppercase">L:</span>
+                  <input
+                    type="number"
+                    step="0.5"
+                    min="-10"
+                    max="50"
+                    value={activeField?.letterSpacing || 0}
+                    onChange={(e) => {
+                      if (activeField) {
+                        if (!selectedFieldId) setSelectedFieldId(activeField.id);
+                        handleUpdateField(activeField.id, { letterSpacing: Number(e.target.value) });
+                      }
+                    }}
+                    disabled={!activeField || activeField.type !== 'text'}
+                    className="w-7 bg-transparent text-xs font-bold font-mono text-center text-amber-300 focus:outline-none focus:bg-slate-800/80 rounded"
+                  />
+                </div>
+
+                {/* Word Spacing Input */}
+                <div
+                  className="h-[34px] flex items-center gap-1 bg-slate-900 px-2 rounded-lg border border-slate-700/80 flex-shrink-0"
+                  title="Word Spacing (px)"
+                >
+                  <span className="text-[10.5px] text-slate-400 font-bold uppercase">W:</span>
+                  <input
+                    type="number"
+                    step="0.5"
+                    min="-10"
+                    max="100"
+                    value={activeField?.wordSpacing || 0}
+                    onChange={(e) => {
+                      if (activeField) {
+                        if (!selectedFieldId) setSelectedFieldId(activeField.id);
+                        handleUpdateField(activeField.id, { wordSpacing: Number(e.target.value) });
+                      }
+                    }}
+                    disabled={!activeField || activeField.type !== 'text'}
+                    className="w-7 bg-transparent text-xs font-bold font-mono text-center text-amber-300 focus:outline-none focus:bg-slate-800/80 rounded"
+                  />
+                </div>
               </div>
 
-              {selectedField && selectedField.type === 'text' && (
-                <div className="flex items-center gap-2 flex-wrap">
-                  {/* Font Family Dropdown (Custom Fonts Listed at Top!) */}
-                  <select
-                    value={selectedField.fontFamily || 'Georgia, serif'}
-                    onChange={(e) => handleUpdateField(selectedField.id, { fontFamily: e.target.value })}
-                    className="select-dark text-xs py-1 px-2.5 font-medium max-w-[180px]"
+              {/* Category Divider */}
+              <div className="w-px h-5 bg-slate-800 self-center flex-shrink-0 mx-0.5" />
+
+              {/* Category 2: Formatting Segmented Control (B, I, U, S) */}
+              {(() => {
+                const fieldIsBold = activeField?.fontWeight === '700' || activeField?.fontWeight === 'bold';
+                const fieldIsItalic = activeField?.fontStyle === 'italic';
+                const fieldIsStrike = Boolean(activeField?.strikethrough);
+                const fieldIsUnderline = Boolean(activeField?.underline);
+
+                const triggerInlineStyle = (styleKey) => {
+                  if (!activeField) return;
+                  if (!selectedFieldId) setSelectedFieldId(activeField.id);
+                  handleApplyInlineStyle(styleKey);
+                };
+
+                return (
+                  <div className="h-[34px] flex items-center gap-0.5 bg-slate-900 p-0.5 rounded-lg border border-slate-700/80 flex-shrink-0">
+                    <button
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => triggerInlineStyle('bold')}
+                      disabled={!activeField || activeField.type !== 'text'}
+                      className={`h-7 w-7 rounded-md flex items-center justify-center transition-colors ${
+                        fieldIsBold ? 'bg-amber-500 text-slate-950 font-black shadow-sm' : 'text-slate-200 hover:text-white hover:bg-slate-800'
+                      } disabled:opacity-30 disabled:cursor-not-allowed`}
+                      title="Bold Selection or Field (Ctrl+B)"
+                    >
+                      <Bold className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => triggerInlineStyle('italic')}
+                      disabled={!activeField || activeField.type !== 'text'}
+                      className={`h-7 w-7 rounded-md flex items-center justify-center transition-colors ${
+                        fieldIsItalic ? 'bg-amber-500 text-slate-950 font-bold shadow-sm' : 'text-slate-200 hover:text-white hover:bg-slate-800'
+                      } disabled:opacity-30 disabled:cursor-not-allowed`}
+                      title="Italicize Selection or Field (Ctrl+I)"
+                    >
+                      <Italic className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => triggerInlineStyle('underline')}
+                      disabled={!activeField || activeField.type !== 'text'}
+                      className={`h-7 w-7 rounded-md flex items-center justify-center transition-colors ${
+                        fieldIsUnderline ? 'bg-amber-500 text-slate-950 font-bold shadow-sm' : 'text-slate-200 hover:text-white hover:bg-slate-800'
+                      } disabled:opacity-30 disabled:cursor-not-allowed`}
+                      title="Underline Selection or Field (Ctrl+U)"
+                    >
+                      <Underline className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => triggerInlineStyle('strikethrough')}
+                      disabled={!activeField || activeField.type !== 'text'}
+                      className={`h-7 w-7 rounded-md flex items-center justify-center transition-colors ${
+                        fieldIsStrike ? 'bg-amber-500 text-slate-950 font-bold shadow-sm' : 'text-slate-200 hover:text-white hover:bg-slate-800'
+                      } disabled:opacity-30 disabled:cursor-not-allowed`}
+                      title="Strikethrough Selection or Field (Ctrl+X)"
+                    >
+                      <Strikethrough className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                );
+              })()}
+
+              {/* Category Divider */}
+              <div className="w-px h-5 bg-slate-800 self-center flex-shrink-0 mx-0.5" />
+
+              {/* Category 3: Alignment Switcher Segmented Control */}
+              <div className="h-[34px] flex items-center gap-0.5 bg-slate-900 p-0.5 rounded-lg border border-slate-700/80 flex-shrink-0">
+                <button
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => {
+                    if (activeField) {
+                      if (!selectedFieldId) setSelectedFieldId(activeField.id);
+                      handleUpdateField(activeField.id, { align: 'left' });
+                    }
+                  }}
+                  disabled={!activeField || activeField.type !== 'text'}
+                  className={`h-7 w-7 rounded-md flex items-center justify-center transition-colors ${
+                    activeField?.align === 'left' ? 'bg-amber-500 text-slate-950 shadow-sm' : 'text-slate-200 hover:text-white hover:bg-slate-800'
+                  } disabled:opacity-30 disabled:cursor-not-allowed`}
+                  title="Align Left"
+                >
+                  <AlignLeft className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => {
+                    if (activeField) {
+                      if (!selectedFieldId) setSelectedFieldId(activeField.id);
+                      handleUpdateField(activeField.id, { align: 'center' });
+                    }
+                  }}
+                  disabled={!activeField || activeField.type !== 'text'}
+                  className={`h-7 w-7 rounded-md flex items-center justify-center transition-colors ${
+                    activeField?.align === 'center' ? 'bg-amber-500 text-slate-950 shadow-sm' : 'text-slate-200 hover:text-white hover:bg-slate-800'
+                  } disabled:opacity-30 disabled:cursor-not-allowed`}
+                  title="Align Center"
+                >
+                  <AlignCenter className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => {
+                    if (activeField) {
+                      if (!selectedFieldId) setSelectedFieldId(activeField.id);
+                      handleUpdateField(activeField.id, { align: 'right' });
+                    }
+                  }}
+                  disabled={!activeField || activeField.type !== 'text'}
+                  className={`h-7 w-7 rounded-md flex items-center justify-center transition-colors ${
+                    activeField?.align === 'right' ? 'bg-amber-500 text-slate-950 shadow-sm' : 'text-slate-200 hover:text-white hover:bg-slate-800'
+                  } disabled:opacity-30 disabled:cursor-not-allowed`}
+                  title="Align Right"
+                >
+                  <AlignRight className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => {
+                    if (activeField) {
+                      if (!selectedFieldId) setSelectedFieldId(activeField.id);
+                      handleUpdateField(activeField.id, { align: 'justify' });
+                    }
+                  }}
+                  disabled={!activeField || activeField.type !== 'text'}
+                  className={`h-7 w-7 rounded-md flex items-center justify-center transition-colors ${
+                    activeField?.align === 'justify' ? 'bg-amber-500 text-slate-950 shadow-sm' : 'text-slate-200 hover:text-white hover:bg-slate-800'
+                  } disabled:opacity-30 disabled:cursor-not-allowed`}
+                  title="Justify (Evenly Spaced)"
+                >
+                  <AlignJustify className="w-3.5 h-3.5" />
+                </button>
+
+                {/* Quick Center Snap Buttons */}
+                <div className="w-px h-4 bg-slate-750 mx-0.5" />
+                <button
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => {
+                    if (activeField) {
+                      if (!selectedFieldId) setSelectedFieldId(activeField.id);
+                      handleUpdateField(activeField.id, { xPct: 0.5 - activeField.wPct / 2 });
+                    }
+                  }}
+                  disabled={!activeField}
+                  className="h-7 px-1.5 rounded-md flex items-center justify-center text-slate-300 hover:text-white hover:bg-slate-800 transition-colors disabled:opacity-30 disabled:cursor-not-allowed text-[10px] gap-1"
+                  title="Snap Center Horizontally on Canvas (Center X)"
+                >
+                  <AlignCenterHorizontal className="w-3.5 h-3.5 text-amber-400" />
+                </button>
+                <button
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => {
+                    if (activeField) {
+                      if (!selectedFieldId) setSelectedFieldId(activeField.id);
+                      handleUpdateField(activeField.id, { yPct: 0.5 - activeField.hPct / 2 });
+                    }
+                  }}
+                  disabled={!activeField}
+                  className="h-7 px-1.5 rounded-md flex items-center justify-center text-slate-300 hover:text-white hover:bg-slate-800 transition-colors disabled:opacity-30 disabled:cursor-not-allowed text-[10px] gap-1"
+                  title="Snap Center Vertically on Canvas (Center Y)"
+                >
+                  <AlignCenterVertical className="w-3.5 h-3.5 text-amber-400" />
+                </button>
+              </div>
+
+              {/* Category Divider */}
+              <div className="w-px h-5 bg-slate-800 self-center flex-shrink-0 mx-0.5" />
+
+              {/* Category 4: Wrap & Casing */}
+              <div className="flex items-center gap-1 flex-shrink-0">
+                {/* Wrap Toggle */}
+                <button
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => {
+                    if (activeField) {
+                      if (!selectedFieldId) setSelectedFieldId(activeField.id);
+                      handleUpdateField(activeField.id, { allowWrap: !activeField.allowWrap });
+                    }
+                  }}
+                  disabled={!activeField || activeField.type !== 'text'}
+                  className={`h-[34px] flex items-center gap-1 px-2.5 rounded-lg border text-xs font-bold transition-colors shadow-sm flex-shrink-0 ${
+                    activeField?.allowWrap
+                      ? 'bg-amber-500/20 text-amber-300 border-amber-500/50'
+                      : 'bg-slate-900 text-slate-300 border-slate-700/80 hover:text-white'
+                  } disabled:opacity-30 disabled:cursor-not-allowed`}
+                  title={activeField?.allowWrap ? 'Wrap Allowed: Text wraps to multiple lines' : 'Single Line: Auto-shrinks text to fit'}
+                >
+                  <WrapText className="w-3.5 h-3.5" />
+                  <span className="font-mono text-[10.5px] uppercase">
+                    {activeField?.allowWrap ? 'Wrap: ON' : 'Wrap: OFF'}
+                  </span>
+                </button>
+
+                {/* Text Casing Dropdown */}
+                <select
+                  value={activeField?.casing || 'as-is'}
+                  onChange={(e) => {
+                    if (activeField) {
+                      if (!selectedFieldId) setSelectedFieldId(activeField.id);
+                      handleUpdateField(activeField.id, { casing: e.target.value });
+                    }
+                  }}
+                  disabled={!activeField || activeField.type !== 'text'}
+                  className="toolbar-select font-mono font-semibold text-slate-200 w-28 flex-shrink-0"
+                  title="Text Casing"
+                >
+                  <option value="as-is">As-Is Casing</option>
+                  <option value="uppercase">UPPERCASE</option>
+                  <option value="lowercase">lowercase</option>
+                  <option value="capitalize">Title Case</option>
+                </select>
+              </div>
+
+              {/* Category Divider */}
+              <div className="w-px h-5 bg-slate-800 self-center flex-shrink-0 mx-0.5" />
+
+              {/* Category 5: Color Swatch */}
+              {(() => {
+                const currentColor = activeField?.color || '#FFFFFF';
+
+                return (
+                  <button
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => {
+                      if (!selectedFieldId && activeField) setSelectedFieldId(activeField.id);
+                      setIsColorPickerOpen(true);
+                    }}
+                    disabled={!activeField || activeField.type !== 'text'}
+                    className="h-[34px] flex items-center gap-1.5 px-2 bg-slate-900 rounded-lg border border-slate-700/80 hover:border-amber-400/60 transition-colors group cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed flex-shrink-0"
+                    title="Change text color & color harmonies"
                   >
-                    {customFonts.length > 0 && (
-                      <optgroup label="🌟 Custom Uploaded Fonts">
-                        {customFonts.map((cf) => (
-                          <option key={cf.name} value={cf.family}>{cf.displayName}</option>
-                        ))}
-                      </optgroup>
-                    )}
-                    <optgroup label="System Standard Fonts">
-                      <option value="Georgia, serif">Georgia (Serif)</option>
-                      <option value="Playfair Display, serif">Playfair Display</option>
-                      <option value="Cinzel, serif">Cinzel (Luxury Serif)</option>
-                      <option value="Plus Jakarta Sans, sans-serif">Plus Jakarta Sans</option>
-                      <option value="Inter, sans-serif">Inter (Sans)</option>
-                    </optgroup>
-                  </select>
-
-                  {/* Font Size Input */}
-                  <div className="flex items-center gap-1 bg-slate-950 px-2 py-0.5 rounded-xl border border-slate-800" title="Font Size (px)">
-                    <span className="text-[10px] text-slate-400 font-bold">Size:</span>
-                    <input
-                      type="number"
-                      min="8"
-                      max="240"
-                      value={selectedField.fontSize || 36}
-                      onChange={(e) => handleUpdateField(selectedField.id, { fontSize: Number(e.target.value) })}
-                      className="w-12 bg-transparent text-xs font-mono text-center text-amber-300 focus:outline-none"
+                    <div
+                      className="w-3.5 h-3.5 rounded border border-slate-600 shadow-sm transition group-hover:scale-110"
+                      style={{ backgroundColor: currentColor }}
                     />
-                  </div>
+                    <span className="text-[11px] font-mono font-bold text-slate-200 group-hover:text-amber-300">
+                      {currentColor}
+                    </span>
+                    <Palette className="w-3 h-3 text-amber-400" />
+                  </button>
+                );
+              })()}
 
-                  {/* Letter Spacing Input */}
-                  <div className="flex items-center gap-1 bg-slate-950 px-2 py-0.5 rounded-xl border border-slate-800" title="Letter Spacing (px)">
-                    <span className="text-[10px] text-slate-400 font-bold font-mono">Letter:</span>
-                    <input
-                      type="number"
-                      step="0.5"
-                      min="-10"
-                      max="50"
-                      value={selectedField.letterSpacing || 0}
-                      onChange={(e) => handleUpdateField(selectedField.id, { letterSpacing: Number(e.target.value) })}
-                      className="w-10 bg-transparent text-xs font-mono text-center text-amber-300 focus:outline-none"
-                    />
-                    <span className="text-[9px] text-slate-500 font-mono">px</span>
-                  </div>
+              {/* Category Divider */}
+              <div className="w-px h-5 bg-slate-800 self-center flex-shrink-0 mx-0.5" />
 
-                  {/* Word Spacing Input */}
-                  <div className="flex items-center gap-1 bg-slate-950 px-2 py-0.5 rounded-xl border border-slate-800" title="Word Spacing (px)">
-                    <span className="text-[10px] text-slate-400 font-bold font-mono">Word:</span>
-                    <input
-                      type="number"
-                      step="0.5"
-                      min="-10"
-                      max="100"
-                      value={selectedField.wordSpacing || 0}
-                      onChange={(e) => handleUpdateField(selectedField.id, { wordSpacing: Number(e.target.value) })}
-                      className="w-10 bg-transparent text-xs font-mono text-center text-amber-300 focus:outline-none"
-                    />
-                    <span className="text-[9px] text-slate-500 font-mono">px</span>
-                  </div>
+              {/* Category 6: Undo & Redo Shortcuts */}
+              <div className="h-[34px] flex items-center gap-0.5 bg-slate-900 p-0.5 rounded-lg border border-slate-700/80 flex-shrink-0">
+                <button
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={handleUndo}
+                  disabled={historyStack.length === 0}
+                  className="h-7 w-7 rounded-md flex items-center justify-center text-slate-300 hover:text-white hover:bg-slate-800 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                  title="Undo (Ctrl+Z)"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={handleRedo}
+                  disabled={redoStack.length === 0}
+                  className="h-7 w-7 rounded-md flex items-center justify-center text-slate-300 hover:text-white hover:bg-slate-800 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                  title="Redo (Ctrl+Y)"
+                >
+                  <RotateCw className="w-3.5 h-3.5" />
+                </button>
+              </div>
 
-                  {/* Formatting Buttons (Inline & Font Property B, I, S, U) */}
-                  {(() => {
-                    const activeTagKey = selectedField?.selectedTag;
-                    const activeTagStyle = activeTagKey ? selectedField?.styledTags?.[activeTagKey] : null;
-
-                    const fieldIsBold = selectedField?.fontWeight === '700' || selectedField?.fontWeight === 'bold';
-                    const fieldIsItalic = selectedField?.fontStyle === 'italic';
-                    const fieldIsStrike = Boolean(selectedField?.strikethrough);
-                    const fieldIsUnderline = Boolean(selectedField?.underline);
-
-                    const isBoldActive = activeTagStyle?.bold !== undefined ? Boolean(activeTagStyle.bold) : fieldIsBold;
-                    const isItalicActive = activeTagStyle?.italic !== undefined ? Boolean(activeTagStyle.italic) : fieldIsItalic;
-                    const isStrikeActive = activeTagStyle?.strikethrough !== undefined ? Boolean(activeTagStyle.strikethrough) : fieldIsStrike;
-                    const isUnderlineActive = activeTagStyle?.underline !== undefined ? Boolean(activeTagStyle.underline) : fieldIsUnderline;
-
-                    return (
-                      <div className="flex items-center gap-0.5 bg-slate-950 p-0.5 rounded-xl border border-slate-800">
-                        <button
-                          onMouseDown={(e) => { e.preventDefault(); handleCaptureSelection(e); }}
-                          onClick={() => handleApplyInlineStyle('bold')}
-                          className={`p-1.5 rounded text-xs ${
-                            isBoldActive ? 'bg-amber-500 text-slate-950 font-black' : 'text-slate-400 hover:text-white'
-                          }`}
-                          title="Toggle Bold"
-                        >
-                          <Bold className="w-3.5 h-3.5" />
-                        </button>
-                        <button
-                          onMouseDown={(e) => { e.preventDefault(); handleCaptureSelection(e); }}
-                          onClick={() => handleApplyInlineStyle('italic')}
-                          className={`p-1.5 rounded text-xs ${
-                            isItalicActive ? 'bg-amber-500 text-slate-950 font-bold' : 'text-slate-400 hover:text-white'
-                          }`}
-                          title="Toggle Italic"
-                        >
-                          <Italic className="w-3.5 h-3.5" />
-                        </button>
-                        <button
-                          onMouseDown={(e) => { e.preventDefault(); handleCaptureSelection(e); }}
-                          onClick={() => handleApplyInlineStyle('strikethrough')}
-                          className={`p-1.5 rounded text-xs ${
-                            isStrikeActive ? 'bg-amber-500 text-slate-950 font-bold' : 'text-slate-400 hover:text-white'
-                          }`}
-                          title="Toggle Strikethrough"
-                        >
-                          <Strikethrough className="w-3.5 h-3.5" />
-                        </button>
-                        <button
-                          onMouseDown={(e) => { e.preventDefault(); handleCaptureSelection(e); }}
-                          onClick={() => handleApplyInlineStyle('underline')}
-                          className={`p-1.5 rounded text-xs ${
-                            isUnderlineActive ? 'bg-amber-500 text-slate-950 font-bold' : 'text-slate-400 hover:text-white'
-                          }`}
-                          title="Toggle Underline"
-                        >
-                          <Underline className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-                    );
-                  })()}
-
-                  {/* Alignment Switcher */}
-                  <div className="flex items-center gap-0.5 bg-slate-950 p-0.5 rounded-xl border border-slate-800">
+              {/* Category 7: Fullscreen Mode Side Drawer Toggles (Prominent when in Fullscreen) */}
+              {isFullscreen && (
+                <>
+                  <div className="w-px h-5 bg-amber-500/40 self-center flex-shrink-0 mx-1" />
+                  <div className="flex items-center gap-1 flex-shrink-0">
                     <button
-                      onClick={() => handleUpdateField(selectedField.id, { align: 'left' })}
-                      className={`p-1.5 rounded ${selectedField.align === 'left' ? 'bg-amber-500 text-slate-950' : 'text-slate-400 hover:text-white'}`}
-                      title="Align Left"
-                    >
-                      <AlignLeft className="w-3.5 h-3.5" />
-                    </button>
-                    <button
-                      onClick={() => handleUpdateField(selectedField.id, { align: 'center' })}
-                      className={`p-1.5 rounded ${selectedField.align === 'center' ? 'bg-amber-500 text-slate-950' : 'text-slate-400 hover:text-white'}`}
-                      title="Align Center"
-                    >
-                      <AlignCenter className="w-3.5 h-3.5" />
-                    </button>
-                    <button
-                      onClick={() => handleUpdateField(selectedField.id, { align: 'right' })}
-                      className={`p-1.5 rounded ${selectedField.align === 'right' ? 'bg-amber-500 text-slate-950' : 'text-slate-400 hover:text-white'}`}
-                      title="Align Right"
-                    >
-                      <AlignRight className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-
-                  {/* Multi-line / Next Line Toggle */}
-                  <div className="flex items-center bg-slate-950 p-0.5 rounded-xl border border-slate-800">
-                    <button
-                      onClick={() => handleUpdateField(selectedField.id, { allowWrap: !selectedField.allowWrap })}
-                      className={`flex items-center gap-1.5 px-2 py-1 rounded text-xs font-semibold transition-all ${
-                        selectedField.allowWrap
-                          ? 'bg-amber-500 text-slate-950 shadow'
-                          : 'text-slate-400 hover:text-white'
+                      onClick={() => setFullscreenPanel((p) => p === 'layers' ? null : 'layers')}
+                      className={`h-[34px] px-2.5 rounded-lg text-xs font-bold border transition flex items-center gap-1.5 shadow-sm ${
+                        fullscreenPanel === 'layers' ? 'bg-amber-500 text-slate-950 border-amber-400 font-bold' : 'bg-slate-900 text-amber-300 border-amber-500/30 hover:bg-slate-800'
                       }`}
-                      title={
-                        selectedField.allowWrap
-                          ? 'Next Line Allowed: Text wraps onto multiple lines instead of shrinking font size'
-                          : 'Single Line Only: Font size automatically shrinks to fit inside 1 line'
-                      }
+                      title="Toggle Layers Panel in Fullscreen"
                     >
-                      <WrapText className="w-3.5 h-3.5" />
-                      <span className="text-[10px] uppercase font-mono tracking-wider">
-                        {selectedField.allowWrap ? 'Next Line: ON' : 'Next Line: OFF'}
-                      </span>
-                    </button>
-                  </div>
-
-                  {/* Text Casing Switcher */}
-                  <select
-                    value={selectedField.casing || 'as-is'}
-                    onChange={(e) => handleUpdateField(selectedField.id, { casing: e.target.value })}
-                    className="select-dark text-xs py-1 px-2 font-mono"
-                    title="Text Casing Transformation"
-                  >
-                    <option value="as-is">As-Is Casing</option>
-                    <option value="uppercase">UPPERCASE</option>
-                    <option value="lowercase">lowercase</option>
-                    <option value="capitalize">Title Case</option>
-                  </select>
-
-                  {/* Undo & Redo Shortcuts Buttons */}
-                  <div className="flex items-center gap-0.5 bg-slate-950 p-0.5 rounded-xl border border-slate-800">
-                    <button
-                      onClick={handleUndo}
-                      disabled={historyStack.length === 0}
-                      className={`p-1.5 rounded ${historyStack.length > 0 ? 'text-slate-200 hover:bg-slate-800' : 'text-slate-600 opacity-50 cursor-not-allowed'}`}
-                      title="Undo (Ctrl+Z)"
-                    >
-                      <RotateCcw className="w-3.5 h-3.5" />
+                      <Layers className="w-3.5 h-3.5" />
+                      <span>Layers</span>
                     </button>
                     <button
-                      onClick={handleRedo}
-                      disabled={redoStack.length === 0}
-                      className={`p-1.5 rounded ${redoStack.length > 0 ? 'text-slate-200 hover:bg-slate-800' : 'text-slate-600 opacity-50 cursor-not-allowed'}`}
-                      title="Redo (Ctrl+Y)"
+                      onClick={() => setFullscreenPanel((p) => p === 'fonts' ? null : 'fonts')}
+                      className={`h-[34px] px-2.5 rounded-lg text-xs font-bold border transition flex items-center gap-1.5 shadow-sm ${
+                        fullscreenPanel === 'fonts' ? 'bg-amber-500 text-slate-950 border-amber-400 font-bold' : 'bg-slate-900 text-indigo-300 border-indigo-500/30 hover:bg-slate-800'
+                      }`}
+                      title="Toggle Custom Fonts in Fullscreen"
                     >
-                      <RotateCw className="w-3.5 h-3.5" />
+                      <FolderPlus className="w-3.5 h-3.5" />
+                      <span>Fonts</span>
+                    </button>
+                    <button
+                      onClick={() => setFullscreenPanel((p) => p === 'records' ? null : 'records')}
+                      className={`h-[34px] px-2.5 rounded-lg text-xs font-bold border transition flex items-center gap-1.5 shadow-sm ${
+                        fullscreenPanel === 'records' ? 'bg-amber-500 text-slate-950 border-amber-400 font-bold' : 'bg-slate-900 text-cyan-300 border-cyan-500/30 hover:bg-slate-800'
+                      }`}
+                      title="Toggle Batch Records in Fullscreen"
+                    >
+                      <FileSpreadsheet className="w-3.5 h-3.5" />
+                      <span>Records</span>
                     </button>
                   </div>
-
-                  {/* Rich Drag-Type Color Picker Button */}
-                  {(() => {
-                    const activeTagKey = selectedField?.selectedTag;
-                    const activeTagStyle = activeTagKey ? selectedField?.styledTags?.[activeTagKey] : null;
-                    const currentColor = activeTagStyle?.color || selectedField?.color || '#FFFFFF';
-
-                    return (
-                      <button
-                        onClick={() => setIsColorPickerOpen(true)}
-                        className="flex items-center gap-1.5 px-2 py-1 bg-slate-950 rounded-xl border border-slate-800 hover:border-amber-400/60 transition group"
-                        title={activeTagKey ? `Change color for selected tag "${activeTagKey}"` : "Change text color for entire box & view Color Theories"}
-                      >
-                        <div
-                          className="w-4 h-4 rounded-md border border-slate-700 shadow-sm group-hover:scale-110 transition"
-                          style={{ backgroundColor: currentColor }}
-                        />
-                        <span className="text-[10px] font-mono font-bold text-slate-300 group-hover:text-amber-300">
-                          {currentColor}
-                        </span>
-                        <Palette className="w-3.5 h-3.5 text-amber-400" />
-                      </button>
-                    );
-                  })()}
-
-                </div>
+                </>
               )}
             </div>
 
-            {/* Dynamic Action Buttons Row: Dynamic Tags + Ranking Awards side-by-side */}
-            {selectedField && selectedField.type === 'text' && (
-              <div className="flex items-center justify-between gap-2 pt-1.5 border-t border-slate-800/80 flex-wrap">
-                {/* Left group: Dynamic Tags & Configure Ranking side-by-side! */}
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={() => setIsDynamicTagsModalOpen(true)}
-                    className="px-3 py-1 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 text-xs font-mono font-bold text-amber-300 border border-amber-500/30 flex items-center gap-1.5 shadow-sm transition"
-                    title="Insert column tags and format template"
-                  >
-                    <Tag className="w-3.5 h-3.5 text-amber-400" /> 🏷️ Insert Dynamic Tag...
-                  </button>
+            {/* ROW 2: Dynamic Automation Buttons & Integrated Live Record Selector (Consolidated 1 Row) */}
+            <div className="flex items-center justify-between gap-2 pt-1.5 border-t border-slate-800/80 flex-wrap">
+              {/* Group 1: Dynamic Tags, Configure Ranking, Make Initial */}
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <button
+                  onClick={() => {
+                    if (!selectedFieldId && activeField) setSelectedFieldId(activeField.id);
+                    setIsDynamicTagsModalOpen(true);
+                  }}
+                  disabled={!activeField}
+                  className="h-[32px] px-2.5 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/40 disabled:opacity-30 disabled:cursor-not-allowed text-xs font-bold flex items-center gap-1.5 transition-colors shadow-sm"
+                  title="Insert column tags and format template"
+                >
+                  <Tag className="w-3.5 h-3.5 text-amber-400" />
+                  <span>Insert Dynamic Tag...</span>
+                </button>
 
-                  <button
-                    onClick={() => setIsRankingModalOpen(true)}
-                    className="px-3 py-1 rounded-xl bg-amber-500/20 hover:bg-amber-500/35 text-xs font-mono font-bold text-amber-300 border border-amber-500/40 flex items-center gap-1.5 shadow-sm transition"
-                    title="Configure score column and placement award schemes (1st, 2nd, Champion, etc.)"
-                  >
-                    <Trophy className="w-3.5 h-3.5 text-amber-400" /> 🏆 Configure Ranking & Awards
-                  </button>
-                </div>
+                <button
+                  onClick={() => setIsRankingModalOpen(true)}
+                  className="h-[32px] px-2.5 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/40 text-xs font-bold flex items-center gap-1.5 transition-colors shadow-sm"
+                  title="Configure score column and placement award schemes"
+                >
+                  <Trophy className="w-3.5 h-3.5 text-amber-400" />
+                  <span>Configure Ranking & Awards</span>
+                </button>
 
-                {/* Right group: View Mode & Middle Initial toggle */}
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={() => setStageViewMode((prev) => (prev === 'record' ? 'tags' : 'record'))}
-                    className={`px-3 py-1 rounded-xl text-xs font-mono font-bold border transition flex items-center gap-1.5 shadow-sm ${
-                      stageViewMode === 'tags'
-                        ? 'bg-indigo-500 text-slate-950 border-indigo-400 font-bold ring-2 ring-indigo-400/40'
-                        : 'bg-slate-950 text-slate-300 border-slate-800 hover:text-white'
-                    }`}
-                    title="Toggle between displaying raw dynamic tags vs evaluated record values on canvas"
-                  >
-                    {stageViewMode === 'tags' ? (
-                      <>
-                        <Tag className="w-3.5 h-3.5 text-slate-950" /> 🏷️ Tag Layout Mode
-                      </>
-                    ) : (
-                      <>
-                        <Eye className="w-3.5 h-3.5 text-indigo-400" /> 👤 Live Record Mode
-                      </>
-                    )}
-                  </button>
-
-                  <button
-                    onClick={handleToggleTagInitial}
-                    className="px-2.5 py-1 rounded-xl bg-indigo-500/15 hover:bg-indigo-500/25 text-xs font-mono font-bold text-indigo-300 border border-indigo-500/30 flex items-center gap-1 transition"
-                    title="Make selected tag Middle Initial ({middle_name} -> {middle_name_initial} -> M.)"
-                  >
-                    🔤 Make Initial (M.I.)
-                  </button>
-                </div>
+                <button
+                  onClick={() => handleToggleTagInitial(activeField)}
+                  disabled={!activeField || activeField.type !== 'text'}
+                  className="h-[32px] px-2.5 rounded-lg bg-indigo-500/15 hover:bg-indigo-500/25 text-indigo-300 border border-indigo-500/40 disabled:opacity-30 disabled:cursor-not-allowed text-xs font-bold flex items-center gap-1.5 transition-colors shadow-sm"
+                  title="Make selected tag Middle Initial ({middle_name} -> {middle_name_initial})"
+                >
+                  <Type className="w-3.5 h-3.5 text-indigo-400" />
+                  <span>Make Initial (M.I.)</span>
+                </button>
               </div>
-            )}
-          </div>
 
-          {/* Record Selector Header & Search */}
-          <div className="flex items-center justify-between flex-wrap gap-2 px-1">
-            <div className="flex items-center gap-2 flex-wrap">
-              <span className="text-xs text-slate-400 font-medium">Live Preview Record:</span>
-              <select
-                value={previewRowIndex}
-                onChange={(e) => setPreviewRowIndex(Number(e.target.value))}
-                className="select-dark text-xs py-1 font-semibold text-amber-300 max-w-[260px]"
-              >
-                {filteredPreviewRows.map((r) => {
-                  const actualIdx = tabulatedRows.indexOf(r);
-                  const name = r.last_name && r.first_name
-                    ? `${r.last_name}, ${r.first_name}`
-                    : r.name || r.first_name || `Record #${actualIdx + 1}`;
-                  return (
-                    <option key={actualIdx} value={actualIdx}>
-                      #{actualIdx + 1}: {name}
-                    </option>
-                  );
-                })}
-              </select>
+              {/* Group Divider */}
+              <div className="w-px h-5 bg-slate-800 self-center hidden sm:block flex-shrink-0 mx-0.5" />
 
-              {/* Record Search Input */}
-              <div className="relative flex items-center">
-                <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 pointer-events-none z-10" />
-                <input
-                  type="text"
-                  placeholder="Search record..."
-                  value={rowSearchQuery}
-                  onChange={(e) => setRowSearchQuery(e.target.value)}
-                  className="input-dark py-1 text-xs w-44 font-mono text-slate-200"
-                  style={{ paddingLeft: '2.1rem' }}
-                />
+              {/* Group 2: Integrated Live Record Preview & Search */}
+              <div className="flex items-center gap-2 flex-wrap">
+                {/* View Mode Toggle: Tag Layout Mode vs Live Record Mode */}
+                <button
+                  onClick={() => setStageViewMode((prev) => (prev === 'record' ? 'tags' : 'record'))}
+                  className={`h-[32px] px-2.5 rounded-lg text-xs font-bold border transition-colors flex items-center gap-1.5 shadow-sm ${
+                    stageViewMode === 'tags'
+                      ? 'bg-indigo-500/25 text-indigo-200 border-indigo-400 ring-1 ring-indigo-400/40'
+                      : 'bg-slate-900 text-slate-300 border-slate-700/80 hover:text-white'
+                  }`}
+                  title="Toggle between displaying raw dynamic tags vs evaluated record values on canvas"
+                >
+                  {stageViewMode === 'tags' ? (
+                    <>
+                      <Tag className="w-3 h-3 text-indigo-300" />
+                      <span>Tag Mode</span>
+                    </>
+                  ) : (
+                    <>
+                      <Eye className="w-3 h-3 text-indigo-400" />
+                      <span>Live Record</span>
+                    </>
+                  )}
+                </button>
+
+                {/* Record Selector Dropdown */}
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[11px] text-slate-400 font-bold uppercase hidden md:inline">Record:</span>
+                  <select
+                    value={previewRowIndex}
+                    onChange={(e) => setPreviewRowIndex(Number(e.target.value))}
+                    className="toolbar-select text-xs font-semibold text-amber-300 max-w-[200px]"
+                  >
+                    {filteredPreviewRows.map((r) => {
+                      const actualIdx = tabulatedRows.indexOf(r);
+                      const name = r.last_name && r.first_name
+                        ? `${r.last_name}, ${r.first_name}`
+                        : r.name || r.first_name || `Record #${actualIdx + 1}`;
+                      return (
+                        <option key={actualIdx} value={actualIdx}>
+                          #{actualIdx + 1}: {name}
+                        </option>
+                      );
+                    })}
+                  </select>
+                </div>
+
+                {/* Record Search Input */}
+                <div className="relative flex items-center">
+                  <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 pointer-events-none z-10" />
+                  <input
+                    type="text"
+                    placeholder="Search record..."
+                    value={rowSearchQuery}
+                    onChange={(e) => setRowSearchQuery(e.target.value)}
+                    className="input-dark py-1 text-xs w-36 font-mono text-slate-200"
+                    style={{ paddingLeft: '2.1rem' }}
+                  />
+                </div>
               </div>
             </div>
           </div>
 
+          {/* FULLSCREEN SLIDE-OVER DRAWER (Layers, Custom Fonts, Batch Records in Fullscreen) */}
+          {isFullscreen && fullscreenPanel && (
+            <div className="fixed inset-y-0 left-0 w-80 bg-slate-900/95 border-r border-slate-700/80 backdrop-blur-xl z-50 shadow-2xl p-4 flex flex-col gap-3 animate-fade-in">
+              {/* Panel Header */}
+              <div className="flex items-center justify-between pb-2 border-b border-slate-800">
+                <div className="flex items-center gap-1.5">
+                  <button
+                    onClick={() => setFullscreenPanel('layers')}
+                    className={`px-2.5 py-1 rounded text-xs font-bold transition ${
+                      fullscreenPanel === 'layers' ? 'bg-amber-500 text-slate-950 shadow-sm' : 'text-slate-400 hover:text-white hover:bg-slate-800'
+                    }`}
+                  >
+                    Layers ({currentLayout?.fields?.length || 0})
+                  </button>
+                  <button
+                    onClick={() => setFullscreenPanel('fonts')}
+                    className={`px-2.5 py-1 rounded text-xs font-bold transition ${
+                      fullscreenPanel === 'fonts' ? 'bg-amber-500 text-slate-950 shadow-sm' : 'text-slate-400 hover:text-white hover:bg-slate-800'
+                    }`}
+                  >
+                    Fonts ({customFonts.length})
+                  </button>
+                  <button
+                    onClick={() => setFullscreenPanel('records')}
+                    className={`px-2.5 py-1 rounded text-xs font-bold transition ${
+                      fullscreenPanel === 'records' ? 'bg-amber-500 text-slate-950 shadow-sm' : 'text-slate-400 hover:text-white hover:bg-slate-800'
+                    }`}
+                  >
+                    Records ({tabulatedRows.length})
+                  </button>
+                </div>
+                <button
+                  onClick={() => setFullscreenPanel(null)}
+                  className="w-7 h-7 rounded-lg flex items-center justify-center text-slate-400 hover:text-white hover:bg-slate-800 transition"
+                  title="Close Drawer"
+                >
+                  <span className="text-base font-bold leading-none">&times;</span>
+                </button>
+              </div>
+
+              {/* Panel Content */}
+              <div className="flex-1 overflow-y-auto space-y-3 scrollbar-thin">
+                {fullscreenPanel === 'layers' && (
+                  <div className="space-y-2.5">
+                    <button
+                      onClick={handleAddField}
+                      className="w-full btn-primary text-xs py-2 flex items-center justify-center gap-1.5 shadow-md"
+                    >
+                      <Plus className="w-3.5 h-3.5" /> Add Text Box
+                    </button>
+                    <div className="space-y-1.5">
+                      {currentLayout?.fields?.map((f, idx) => (
+                        <div
+                          key={f.id}
+                          onClick={() => setSelectedFieldId(f.id)}
+                          className={`p-2.5 rounded-xl border text-xs flex items-center justify-between cursor-pointer transition ${
+                            selectedFieldId === f.id
+                              ? 'bg-amber-500/20 border-amber-500/50 text-white ring-1 ring-amber-400/30'
+                              : 'bg-slate-800/40 border-slate-700/60 text-slate-300 hover:bg-slate-800'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2 flex-1 min-w-0">
+                            <span className="font-mono text-[10px] text-amber-400 font-bold">#{idx + 1}</span>
+                            <span className="truncate font-semibold">{f.name || f.key || 'Field'}</span>
+                          </div>
+                          <div className="flex items-center gap-1">
+                            <button
+                              onClick={(e) => { e.stopPropagation(); handleDuplicateField(f.id); }}
+                              className="p-1 text-slate-400 hover:text-white rounded"
+                              title="Duplicate Field"
+                            >
+                              <Copy className="w-3 h-3" />
+                            </button>
+                            <button
+                              onClick={(e) => { e.stopPropagation(); handleDeleteField(f.id); }}
+                              className="p-1 text-red-400 hover:text-red-300 rounded"
+                              title="Delete Field"
+                            >
+                              <Trash2 className="w-3 h-3" />
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {fullscreenPanel === 'fonts' && (
+                  <div className="space-y-2.5">
+                    <button
+                      onClick={() => fontFileInputRef.current?.click()}
+                      className="w-full btn-primary text-xs py-2 flex items-center justify-center gap-1.5 shadow-md"
+                    >
+                      <FolderPlus className="w-3.5 h-3.5" /> Upload Font (.ttf / .otf)
+                    </button>
+                    <div className="space-y-1.5">
+                      {customFonts.length === 0 ? (
+                        <div className="p-4 rounded-xl border border-dashed border-slate-700 text-center">
+                          <p className="text-xs text-slate-400 italic">No custom fonts uploaded yet.</p>
+                          <p className="text-[10px] text-slate-500 mt-1">Upload .ttf or .otf files to use on certificates.</p>
+                        </div>
+                      ) : (
+                        customFonts.map((cf) => (
+                          <div key={cf.name} className="p-2.5 rounded-xl bg-slate-800/40 border border-slate-700/60 text-xs text-slate-200">
+                            <span className="font-semibold block">{cf.displayName}</span>
+                            <span className="text-[10px] text-slate-400 font-mono">{cf.family}</span>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {fullscreenPanel === 'records' && (
+                  <div className="space-y-2.5">
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => dataFileInputRef.current?.click()}
+                        className="flex-1 btn-primary text-xs py-2 flex items-center justify-center gap-1.5 shadow-md"
+                      >
+                        <FileSpreadsheet className="w-3.5 h-3.5" /> Upload File
+                      </button>
+                      <button
+                        onClick={() => setIsDataEditorOpen(true)}
+                        className="btn-secondary text-xs py-2 px-3 flex items-center gap-1"
+                        title="Open Records Data Table Editor"
+                      >
+                        <Table className="w-3.5 h-3.5 text-indigo-400" /> Editor
+                      </button>
+                    </div>
+                    <div className="text-xs text-slate-300 flex justify-between p-2.5 rounded-xl bg-slate-800/40 border border-slate-700/60 font-mono">
+                      <span>Selected Rows:</span>
+                      <span className="font-bold text-amber-300">{selectedRowIndices.size} / {tabulatedRows.length}</span>
+                    </div>
+                    {/* Quick Winner Filter */}
+                    <div className="space-y-1.5 pt-1">
+                      <span className="text-[10px] uppercase font-bold text-slate-400">Quick Select:</span>
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <button onClick={() => handleSelectTopN(1)} className="btn-secondary text-[10px] py-1 px-2.5">Top 1</button>
+                        <button onClick={() => handleSelectTopN(3)} className="btn-secondary text-[10px] py-1 px-2.5">Top 3</button>
+                        <button onClick={() => handleSelectTopN(5)} className="btn-secondary text-[10px] py-1 px-2.5">Top 5</button>
+                        <button onClick={handleSelectAllRows} className="btn-secondary text-[10px] py-1 px-2.5">All</button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
           {/* MASSIVE CANVA-STYLE INTERACTIVE STAGE VIEWPORT */}
-          <div className="w-full glass-panel p-3 rounded-2xl overflow-hidden shadow-inner min-h-[520px] flex flex-col items-center justify-center">
+          <div className={`w-full flex flex-col items-center justify-center relative transition-all ${
+            isFullscreen
+              ? 'flex-1 min-h-0 overflow-hidden p-0 m-0 bg-slate-950'
+              : 'glass-panel p-3 rounded-2xl overflow-hidden shadow-inner min-h-[520px]'
+          }`}>
             <InteractiveStage
               currentLayout={currentLayout}
               selectedFieldId={selectedFieldId}
@@ -1679,54 +1907,266 @@ export default function LayoutStudio({ onStartExport, setExportStatus, onProgres
               stageViewMode={stageViewMode}
               onToggleFullscreen={handleToggleFullscreen}
               isFullscreen={isFullscreen}
+              isSnappingEnabled={isSnappingEnabled}
+              onToggleSnapping={() => setIsSnappingEnabled((s) => !s)}
+              onTextSelectionChange={setActiveTextSelection}
             />
           </div>
         </div>
       </div>
 
-      {/* Large Batch Advisory Modal */}
-      {isLargeBatchModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-fade-in">
-          <div className="bg-slate-900 border border-amber-500/40 w-full max-w-md rounded-2xl shadow-2xl overflow-hidden p-6 space-y-4">
-            <div className="flex items-center gap-3 text-amber-400">
-              <div className="p-3 rounded-xl bg-amber-500/20 border border-amber-500/30">
-                <ShieldAlert className="w-6 h-6 text-amber-400" />
-              </div>
-              <div>
-                <h3 className="text-base font-bold text-white">Large Batch Advisory</h3>
-                <p className="text-xs text-amber-300 font-medium">
-                  {selectedRowIndices.size} Certificates Selected
-                </p>
-              </div>
-            </div>
+      {/* CSV Data Table Editor Modal */}
+      <CSVDataEditorModal
+        isOpen={isDataEditorOpen}
+        onClose={() => setIsDataEditorOpen(false)}
+        rows={rows}
+        onSaveRows={(updatedRows) => {
+          setRows(updatedRows);
+          setSelectedRowIndices(new Set(updatedRows.map((_, i) => i)));
+          if (previewRowIndex >= updatedRows.length) setPreviewRowIndex(0);
+        }}
+        selectedRowIndices={selectedRowIndices}
+        onToggleSelectRow={handleToggleRowSelection}
+        onSelectAll={handleSelectAllRows}
+        onDeselectAll={handleDeselectAllRows}
+      />
 
-            <p className="text-xs text-slate-300 leading-relaxed">
-              Enabling <strong>Safe Memory Mode</strong> is recommended for large exports to prevent memory exhaustion.
-            </p>
+      {/* Batch Export Settings & Hierarchy Modal */}
+      {isExportSettingsModalOpen && (
+        <FullscreenPortal>
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-fade-in">
+            <div className="bg-slate-900 border border-amber-500/40 w-full max-w-2xl rounded-3xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+              {/* Modal Header */}
+              <div className="px-6 py-4 border-b border-slate-800 bg-slate-950/60 flex items-center justify-between">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-9 h-9 rounded-2xl bg-amber-500/20 text-amber-400 border border-amber-500/30 flex items-center justify-center">
+                    <Download className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h3 className="font-bold text-base text-white">Batch Export Settings</h3>
+                    <p className="text-xs text-slate-400">Configure resolution, batch chunking, and folder hierarchy before downloading.</p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setIsExportSettingsModalOpen(false)}
+                  className="text-slate-400 hover:text-white p-1 rounded-lg transition-colors font-bold text-base"
+                >
+                  ✕
+                </button>
+              </div>
 
-            <div className="grid grid-cols-2 gap-2 pt-2">
-              <button
-                onClick={() => {
-                  setSafeMemoryMode(true);
-                  setIsLargeBatchModalOpen(false);
-                  setTimeout(() => handleGenerateBatchZip(), 50);
-                }}
-                className="btn-gold text-xs py-2.5 justify-center font-bold flex items-center gap-1.5"
-              >
-                <ShieldCheck className="w-4 h-4 text-slate-950" /> Enable Safe & Start
-              </button>
-              <button
-                onClick={() => {
-                  setIsLargeBatchModalOpen(false);
-                  setTimeout(() => handleGenerateBatchZip(), 50);
-                }}
-                className="btn-secondary text-xs py-2.5 justify-center"
-              >
-                Proceed Fast
-              </button>
+              {/* Modal Content / Form Options */}
+              <div className="p-6 overflow-y-auto space-y-5 flex-1">
+                {/* SECTION 1: QUALITY & RESOLUTION */}
+                <div className="glass-panel p-4 space-y-3 border-slate-800">
+                  <h4 className="text-xs font-bold text-amber-300 uppercase tracking-wider flex items-center gap-1.5">
+                    <Sparkles className="w-4 h-4 text-amber-400" /> Quality & Canvas Resolution Settings
+                  </h4>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="text-xs font-medium text-slate-300 block mb-1">Export File Format:</label>
+                      <select
+                        value={exportFormat}
+                        onChange={(e) => setExportFormat(e.target.value)}
+                        className="select-dark text-xs w-full py-1.5 font-mono"
+                      >
+                        <option value="png">PNG (High Definition / Lossless)</option>
+                        <option value="jpeg">JPEG (Compressed / Smaller Zip)</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="text-xs font-medium text-slate-300 block mb-1">Canvas Resolution Scale:</label>
+                      <select
+                        value={exportResolution}
+                        onChange={(e) => setExportResolution(Number(e.target.value))}
+                        className="select-dark text-xs w-full py-1.5 font-mono"
+                      >
+                        <option value={2560}>🌟 2560px Max (Ultra HD / Print Quality)</option>
+                        <option value={1920}>⚡ 1920px Max (Standard HD / Fast)</option>
+                        <option value={1280}>🛡️ 1280px Max (Compact / Mobile Safe)</option>
+                      </select>
+                    </div>
+                  </div>
+                </div>
+
+                {/* SECTION 2: BATCH CHUNKING (PER 100 RECORDS) */}
+                <div className="glass-panel p-4 space-y-3 border-indigo-500/30">
+                  <div className="flex items-center justify-between">
+                    <h4 className="text-xs font-bold text-indigo-300 uppercase tracking-wider flex items-center gap-1.5">
+                      <Layers className="w-4 h-4 text-indigo-400" /> Batch Chunking (ZIP Volumes)
+                    </h4>
+                    <span className="text-[11px] font-mono text-amber-300 font-bold bg-amber-500/10 px-2.5 py-0.5 rounded border border-amber-500/20">
+                      {Math.ceil(selectedRowIndices.size / exportBatchChunkSize)} ZIP Volume(s)
+                    </span>
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-slate-300 block mb-1">Items Per ZIP Volume:</label>
+                    <select
+                      value={exportBatchChunkSize}
+                      onChange={(e) => setExportBatchChunkSize(Number(e.target.value))}
+                      className="select-dark text-xs w-full py-1.5 font-mono"
+                    >
+                      <option value={100}>100 Items Per ZIP (Default / Balanced RAM)</option>
+                      <option value={50}>50 Items Per ZIP (High Reliability for Low RAM)</option>
+                      <option value={200}>200 Items Per ZIP (Faster Single Download)</option>
+                      <option value={500}>500 Items Per ZIP (Large Single ZIP Volume)</option>
+                    </select>
+                    <p className="text-[11px] text-slate-400 mt-1.5">
+                      Splitting generation into chunks of {exportBatchChunkSize} records prevents browser tab memory freezes and allows continuous background downloads.
+                    </p>
+                  </div>
+                </div>
+
+                {/* SECTION 3: HIERARCHICAL FOLDER SORTING ({program} {year} {section}) */}
+                <div className="glass-panel p-4 space-y-3.5 border-emerald-500/30">
+                  <div className="flex items-center justify-between">
+                    <h4 className="text-xs font-bold text-emerald-300 uppercase tracking-wider flex items-center gap-1.5">
+                      <FolderTree className="w-4 h-4 text-emerald-400" /> Hierarchical Folder Organization
+                    </h4>
+                  </div>
+
+                  <p className="text-xs text-slate-300">
+                    Select CSV columns to organize exported certificates into sub-folders based on hierarchy (e.g., <span className="text-amber-300 font-mono font-bold">Program</span>, <span className="text-amber-300 font-mono font-bold">Year</span>, and <span className="text-amber-300 font-mono font-bold">Section</span>):
+                  </p>
+
+                  {/* Column Header Selection Pills */}
+                  <div className="flex flex-wrap gap-1.5 max-h-32 overflow-y-auto p-2 bg-slate-950/80 rounded-xl border border-slate-800">
+                    {headers.filter(h => !h.startsWith('_')).map((col) => {
+                      const isSelected = exportHierarchyColumns.includes(col);
+                      return (
+                        <button
+                          key={col}
+                          onClick={() => {
+                            if (isSelected) {
+                              setExportHierarchyColumns(exportHierarchyColumns.filter(c => c !== col));
+                            } else {
+                              setExportHierarchyColumns([...exportHierarchyColumns, col]);
+                            }
+                          }}
+                          className={`px-2.5 py-1 rounded-lg text-xs font-mono font-bold transition flex items-center gap-1 border ${
+                            isSelected
+                              ? 'bg-emerald-500 text-slate-950 border-emerald-400 shadow-sm'
+                              : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-white'
+                          }`}
+                        >
+                          {isSelected ? '✓ ' : '+ '} {col}
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  {/* Hierarchy Folder Path Preview */}
+                  {exportHierarchyColumns.length > 0 && (
+                    <div className="p-3 bg-slate-950 rounded-xl border border-emerald-500/30 text-xs space-y-1.5">
+                      <span className="text-slate-400 font-mono text-[10px] uppercase font-bold block">Target Folder Path:</span>
+                      <div className="flex items-center gap-2 font-mono text-emerald-300 font-bold">
+                        <FolderPlus className="w-4 h-4 text-emerald-400 flex-shrink-0" />
+                        <span>
+                          {exportFolderMode === 'combined'
+                            ? `{ ${exportHierarchyColumns.join(' ')} } / Certificate.png`
+                            : `${exportHierarchyColumns.join(' / ')} / Certificate.png`}
+                        </span>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Hierarchy Sort & Mode Toggles */}
+                  <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 pt-1 border-t border-slate-800">
+                    <label className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={exportSortByHierarchy}
+                        onChange={(e) => setExportSortByHierarchy(e.target.checked)}
+                        className="rounded bg-slate-950 border-slate-700 text-amber-500 focus:ring-0"
+                      />
+                      <span>Sort records by Hierarchy before export</span>
+                    </label>
+
+                    <div className="flex items-center gap-2 text-xs">
+                      <span className="text-slate-400">Folder Style:</span>
+                      <select
+                        value={exportFolderMode}
+                        onChange={(e) => setExportFolderMode(e.target.value)}
+                        className="select-dark text-xs py-0.5 px-2 font-mono"
+                      >
+                        <option value="combined">Combined Folder Name ({exportHierarchyColumns.join(' ') || 'Program Year Sec'})</option>
+                        <option value="nested">Nested Subfolders (Program / Year / Section)</option>
+                      </select>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Modal Actions */}
+              <div className="px-6 py-4 border-t border-slate-800 bg-slate-950/80 flex items-center justify-end gap-3">
+                <button
+                  onClick={() => setIsExportSettingsModalOpen(false)}
+                  className="btn-secondary text-xs py-2 px-4 font-bold"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => {
+                    setIsExportSettingsModalOpen(false);
+                    executeBatchZipExport();
+                  }}
+                  className="btn-gold text-xs py-2 px-5 font-bold shadow-lg shadow-amber-500/20 flex items-center gap-2"
+                >
+                  <Download className="w-4 h-4 text-slate-950" />
+                  <span>Start Batch Export ({selectedRowIndices.size} Records)</span>
+                </button>
+              </div>
             </div>
           </div>
-        </div>
+        </FullscreenPortal>
+      )}
+
+      {/* Large Batch Advisory Modal */}
+      {isLargeBatchModalOpen && (
+        <FullscreenPortal>
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-fade-in">
+            <div className="bg-slate-900 border border-amber-500/40 w-full max-w-md rounded-2xl shadow-2xl overflow-hidden p-6 space-y-4">
+              <div className="flex items-center gap-3 text-amber-400">
+                <div className="p-3 rounded-xl bg-amber-500/20 border border-amber-500/30">
+                  <ShieldAlert className="w-6 h-6 text-amber-400" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-white">Large Batch Advisory</h3>
+                  <p className="text-xs text-amber-300 font-medium">
+                    {selectedRowIndices.size} Certificates Selected
+                  </p>
+                </div>
+              </div>
+
+              <p className="text-xs text-slate-300 leading-relaxed">
+                Enabling <strong>Safe Memory Mode</strong> is recommended for large exports to prevent memory exhaustion.
+              </p>
+
+              <div className="grid grid-cols-2 gap-2 pt-2">
+                <button
+                  onClick={() => {
+                    setSafeMemoryMode(true);
+                    setIsLargeBatchModalOpen(false);
+                    setTimeout(() => handleGenerateBatchZip(), 50);
+                  }}
+                  className="btn-gold text-xs py-2.5 justify-center font-bold flex items-center gap-1.5"
+                >
+                  <ShieldCheck className="w-4 h-4 text-slate-950" /> Enable Safe & Start
+                </button>
+                <button
+                  onClick={() => {
+                    setIsLargeBatchModalOpen(false);
+                    setTimeout(() => handleGenerateBatchZip(), 50);
+                  }}
+                  className="btn-secondary text-xs py-2.5 justify-center"
+                >
+                  Proceed Fast
+                </button>
+              </div>
+            </div>
+          </div>
+        </FullscreenPortal>
       )}
 
       {/* Ranking & Awards Config Modal */}
@@ -1778,12 +2218,20 @@ export default function LayoutStudio({ onStartExport, setExportStatus, onProgres
         isOpen={isDynamicTagsModalOpen}
         onClose={() => setIsDynamicTagsModalOpen(false)}
         headers={headers}
-        initialTemplate={selectedField?.customTemplate || ''}
+        initialTemplate={
+          (() => {
+            const t = (selectedField || activeField)?.customTemplate || '';
+            return (t === 'Input text here...' || t === 'Insert text here...') ? '' : t;
+          })()
+        }
         previewRow={activePreviewRow}
-        enableTabulationTags={Boolean(selectedField?.enableTabulationTags || scoreColumn)}
+        enableTabulationTags={Boolean((selectedField || activeField)?.enableTabulationTags || scoreColumn)}
         onApplyTemplate={(newTpl) => {
-          saveSnapshot();
-          handleUpdateField(selectedField.id, { customTemplate: newTpl });
+          const target = selectedField || activeField;
+          if (target) {
+            saveSnapshot();
+            handleUpdateField(target.id, { customTemplate: newTpl });
+          }
         }}
       />
 
@@ -1792,8 +2240,8 @@ export default function LayoutStudio({ onStartExport, setExportStatus, onProgres
         isOpen={isColorPickerOpen}
         onClose={() => setIsColorPickerOpen(false)}
         color={
-          (selectedField?.selectedTag && selectedField?.styledTags?.[selectedField.selectedTag]?.color) ||
-          selectedField?.color ||
+          ((selectedField || activeField)?.selectedTag && (selectedField || activeField)?.styledTags?.[(selectedField || activeField).selectedTag]?.color) ||
+          (selectedField || activeField)?.color ||
           '#FFFFFF'
         }
         onChange={handleColorChange}
