@@ -156,15 +156,19 @@ export async function renderCanvasElement(ctx, canvasWidth, canvasHeight, layerD
   // Clear canvas
   ctx.clearRect(0, 0, canvasWidth, canvasHeight);
 
+  const validCropArea = (docCropArea && docCropArea.width > 0 && docCropArea.height > 0)
+    ? docCropArea
+    : { x: 0, y: 0, width: canvasWidth, height: canvasHeight };
+
   // 1. Draw Documentation / Content Image (if present, underneath background or frame)
   if (docImage) {
     drawCoverImage(
       ctx,
       docImage,
-      docCropArea.x,
-      docCropArea.y,
-      docCropArea.width,
-      docCropArea.height,
+      validCropArea.x,
+      validCropArea.y,
+      validCropArea.width,
+      validCropArea.height,
       docAlignment
     );
   }

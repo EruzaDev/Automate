@@ -1,5 +1,25 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { Image as ImageIcon, Upload, Layers, Crop, Download, Loader2, CheckSquare, Square, HelpCircle, ShieldAlert, ShieldCheck } from 'lucide-react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { 
+  Image as ImageIcon, 
+  Upload, 
+  Layers, 
+  Crop, 
+  Download, 
+  Loader2, 
+  CheckSquare, 
+  Square, 
+  HelpCircle, 
+  ShieldAlert, 
+  ShieldCheck, 
+  Crosshair, 
+  ZoomIn, 
+  ZoomOut, 
+  Eye, 
+  EyeOff, 
+  BoxSelect, 
+  Sparkles,
+  Maximize2
+} from 'lucide-react';
 import { renderCanvasElement, loadImage, createCompressedThumbnail } from '../../utils/canvasRenderer';
 import { exportBatchToZip } from '../../utils/zipExporter';
 
@@ -16,6 +36,21 @@ export default function FrameEditor({ onStartExport, setExportStatus, onProgress
 
   const [docAlignment, setDocAlignment] = useState('center');
   const [autoClearPhotos, setAutoClearPhotos] = useState(true);
+
+  // Photo Placement Mode: 'full' (Full Frame) | 'custom' (Custom Photo Slot)
+  const [photoSlotMode, setPhotoSlotMode] = useState('full');
+  // Normalized slot coordinates (0.0 to 1.0)
+  const [customSlot, setCustomSlot] = useState({
+    xPct: 0.1,
+    yPct: 0.1,
+    wPct: 0.8,
+    hPct: 0.8
+  });
+  const [showSlotGuides, setShowSlotGuides] = useState(true);
+  const [zoomScale, setZoomScale] = useState(1.0);
+  const [snapLines, setSnapLines] = useState({ showX: false, showY: false, xPos: 0, yPos: 0 });
+
+  const stageContainerRef = useRef(null);
 
   // Export Quality & Safe Memory Settings
   const [exportResolution, setExportResolution] = useState(0); // Default 0 = Original (100% Native Quality)
@@ -34,6 +69,322 @@ export default function FrameEditor({ onStartExport, setExportStatus, onProgress
   const canvasRef = useRef(null);
   const frameInputRef = useRef(null);
   const docBatchInputRef = useRef(null);
+
+  // Active pixel bounding box calculated from canvas resolution
+  const activeCropArea = useMemo(() => {
+    if (photoSlotMode === 'custom') {
+      return {
+        x: Math.round(customSlot.xPct * canvasSize.width),
+        y: Math.round(customSlot.yPct * canvasSize.height),
+        width: Math.max(1, Math.round(customSlot.wPct * canvasSize.width)),
+        height: Math.max(1, Math.round(customSlot.hPct * canvasSize.height))
+      };
+    }
+    return {
+      x: 0,
+      y: 0,
+      width: canvasSize.width,
+      height: canvasSize.height
+    };
+  }, [photoSlotMode, customSlot, canvasSize]);
+
+  // Magnetic Snapping helper for custom photo slot
+  const applySnapping = (xPct, yPct, wPct, hPct, displayW, displayH) => {
+    const snapThreshold = 0.015; // 1.5% magnetic snap zone
+    let finalX = xPct;
+    let finalY = yPct;
+    let isSnappedX = false;
+    let isSnappedY = false;
+
+    // Center X Snap (50% stage width)
+    const centerX = 0.5 - wPct / 2;
+    if (Math.abs(xPct - centerX) < snapThreshold) {
+      finalX = centerX;
+      isSnappedX = true;
+    }
+
+    // Center Y Snap (50% stage height)
+    const centerY = 0.5 - hPct / 2;
+    if (Math.abs(yPct - centerY) < snapThreshold) {
+      finalY = centerY;
+      isSnappedY = true;
+    }
+
+    // Left Edge Snap (0)
+    if (Math.abs(xPct) < snapThreshold) {
+      finalX = 0;
+      isSnappedX = true;
+    }
+    // Right Edge Snap (1 - wPct)
+    if (Math.abs(xPct - (1 - wPct)) < snapThreshold) {
+      finalX = 1 - wPct;
+      isSnappedX = true;
+    }
+
+    // Top Edge Snap (0)
+    if (Math.abs(yPct) < snapThreshold) {
+      finalY = 0;
+      isSnappedY = true;
+    }
+    // Bottom Edge Snap (1 - hPct)
+    if (Math.abs(yPct - (1 - hPct)) < snapThreshold) {
+      finalY = 1 - hPct;
+      isSnappedY = true;
+    }
+
+    setSnapLines({
+      showX: isSnappedX,
+      showY: isSnappedY,
+      xPos: (finalX + wPct / 2) * displayW,
+      yPos: (finalY + hPct / 2) * displayH
+    });
+
+    return { x: finalX, y: finalY };
+  };
+
+  // Draggable Bounding Box Move (Mouse + Touch)
+  const handleSlotMoveStart = (e) => {
+    e.stopPropagation();
+    const clientX = e.clientX ?? e.touches?.[0]?.clientX;
+    const clientY = e.clientY ?? e.touches?.[0]?.clientY;
+    if (clientX === undefined || clientY === undefined) return;
+
+    const stageRect = stageContainerRef.current?.getBoundingClientRect();
+    if (!stageRect || stageRect.width === 0 || stageRect.height === 0) return;
+
+    const startX = clientX;
+    const startY = clientY;
+    const origXPct = customSlot.xPct;
+    const origYPct = customSlot.yPct;
+    const wPct = customSlot.wPct;
+    const hPct = customSlot.hPct;
+
+    let hasMoved = false;
+
+    const onMove = (moveEvent) => {
+      const curX = moveEvent.clientX ?? moveEvent.touches?.[0]?.clientX;
+      const curY = moveEvent.clientY ?? moveEvent.touches?.[0]?.clientY;
+      if (curX === undefined || curY === undefined) return;
+
+      const dist = Math.hypot(curX - startX, curY - startY);
+      if (!hasMoved && dist < 3) return;
+      hasMoved = true;
+      if (moveEvent.cancelable) moveEvent.preventDefault();
+
+      const dx = (curX - startX) / stageRect.width;
+      const dy = (curY - startY) / stageRect.height;
+
+      const rawX = Math.max(0, Math.min(1 - wPct, origXPct + dx));
+      const rawY = Math.max(0, Math.min(1 - hPct, origYPct + dy));
+
+      const snapped = applySnapping(rawX, rawY, wPct, hPct, stageRect.width, stageRect.height);
+      setCustomSlot((prev) => ({
+        ...prev,
+        xPct: snapped.x,
+        yPct: snapped.y
+      }));
+    };
+
+    const onEnd = () => {
+      setSnapLines({ showX: false, showY: false, xPos: 0, yPos: 0 });
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onEnd);
+      window.removeEventListener('touchmove', onMove);
+      window.removeEventListener('touchend', onEnd);
+    };
+
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onEnd);
+    window.addEventListener('touchmove', onMove, { passive: false });
+    window.addEventListener('touchend', onEnd);
+  };
+
+  // 8-Direction Handle Resizing (Mouse + Touch)
+  const handleSlotResizeStart = (e, direction) => {
+    e.stopPropagation();
+    if (e.cancelable) e.preventDefault();
+
+    const clientX = e.clientX ?? e.touches?.[0]?.clientX;
+    const clientY = e.clientY ?? e.touches?.[0]?.clientY;
+    if (clientX === undefined || clientY === undefined) return;
+
+    const stageRect = stageContainerRef.current?.getBoundingClientRect();
+    if (!stageRect || stageRect.width === 0 || stageRect.height === 0) return;
+
+    const startX = clientX;
+    const startY = clientY;
+    const startSlot = { ...customSlot };
+    const minW = 0.05; // 5% minimum
+    const minH = 0.05;
+
+    const onMove = (moveEvent) => {
+      const curX = moveEvent.clientX ?? moveEvent.touches?.[0]?.clientX;
+      const curY = moveEvent.clientY ?? moveEvent.touches?.[0]?.clientY;
+      if (curX === undefined || curY === undefined) return;
+      if (moveEvent.cancelable) moveEvent.preventDefault();
+
+      const dx = (curX - startX) / stageRect.width;
+      const dy = (curY - startY) / stageRect.height;
+
+      let { xPct, yPct, wPct, hPct } = startSlot;
+
+      // East (Right)
+      if (direction.includes('e')) {
+        wPct = Math.max(minW, Math.min(1 - startSlot.xPct, startSlot.wPct + dx));
+      }
+      // West (Left)
+      if (direction.includes('w')) {
+        const maxDx = startSlot.wPct - minW;
+        const appliedDx = Math.max(-startSlot.xPct, Math.min(maxDx, dx));
+        xPct = startSlot.xPct + appliedDx;
+        wPct = startSlot.wPct - appliedDx;
+      }
+      // South (Bottom)
+      if (direction.includes('s')) {
+        hPct = Math.max(minH, Math.min(1 - startSlot.yPct, startSlot.hPct + dy));
+      }
+      // North (Top)
+      if (direction.includes('n')) {
+        const maxDy = startSlot.hPct - minH;
+        const appliedDy = Math.max(-startSlot.yPct, Math.min(maxDy, dy));
+        yPct = startSlot.yPct + appliedDy;
+        hPct = startSlot.hPct - appliedDy;
+      }
+
+      setCustomSlot({
+        xPct: Math.max(0, Math.min(1 - minW, xPct)),
+        yPct: Math.max(0, Math.min(1 - minH, yPct)),
+        wPct: Math.max(minW, Math.min(1, wPct)),
+        hPct: Math.max(minH, Math.min(1, hPct))
+      });
+    };
+
+    const onEnd = () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onEnd);
+      window.removeEventListener('touchmove', onMove);
+      window.removeEventListener('touchend', onEnd);
+    };
+
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onEnd);
+    window.addEventListener('touchmove', onMove, { passive: false });
+    window.addEventListener('touchend', onEnd);
+  };
+
+  const snapCenterX = () => {
+    setCustomSlot((prev) => ({
+      ...prev,
+      xPct: Math.max(0, Math.min(1 - prev.wPct, 0.5 - prev.wPct / 2))
+    }));
+  };
+
+  const snapCenterY = () => {
+    setCustomSlot((prev) => ({
+      ...prev,
+      yPct: Math.max(0, Math.min(1 - prev.hPct, 0.5 - prev.hPct / 2))
+    }));
+  };
+
+  const snapCenterBoth = () => {
+    setCustomSlot((prev) => ({
+      ...prev,
+      xPct: Math.max(0, Math.min(1 - prev.wPct, 0.5 - prev.wPct / 2)),
+      yPct: Math.max(0, Math.min(1 - prev.hPct, 0.5 - prev.hPct / 2))
+    }));
+  };
+
+  const applySlotPreset = (preset) => {
+    const W = canvasSize.width || 1000;
+    const H = canvasSize.height || 1000;
+
+    if (preset === 'center80') {
+      setCustomSlot({ xPct: 0.1, yPct: 0.1, wPct: 0.8, hPct: 0.8 });
+    } else if (preset === 'center70') {
+      setCustomSlot({ xPct: 0.15, yPct: 0.15, wPct: 0.7, hPct: 0.7 });
+    } else if (preset === 'square') {
+      const minDim = Math.min(W, H) * 0.75;
+      const wPct = minDim / W;
+      const hPct = minDim / H;
+      setCustomSlot({
+        xPct: 0.5 - wPct / 2,
+        yPct: 0.5 - hPct / 2,
+        wPct,
+        hPct
+      });
+    } else if (preset === 'photo43') {
+      let targetW = W * 0.8;
+      let targetH = targetW * (3 / 4);
+      if (targetH > H * 0.8) {
+        targetH = H * 0.8;
+        targetW = targetH * (4 / 3);
+      }
+      const wPct = targetW / W;
+      const hPct = targetH / H;
+      setCustomSlot({
+        xPct: 0.5 - wPct / 2,
+        yPct: 0.5 - hPct / 2,
+        wPct,
+        hPct
+      });
+    } else if (preset === 'photo32') {
+      let targetW = W * 0.8;
+      let targetH = targetW * (2 / 3);
+      if (targetH > H * 0.8) {
+        targetH = H * 0.8;
+        targetW = targetH * (3 / 2);
+      }
+      const wPct = targetW / W;
+      const hPct = targetH / H;
+      setCustomSlot({
+        xPct: 0.5 - wPct / 2,
+        yPct: 0.5 - hPct / 2,
+        wPct,
+        hPct
+      });
+    } else if (preset === 'wide169') {
+      let targetW = W * 0.85;
+      let targetH = targetW * (9 / 16);
+      if (targetH > H * 0.85) {
+        targetH = H * 0.85;
+        targetW = targetH * (16 / 9);
+      }
+      const wPct = targetW / W;
+      const hPct = targetH / H;
+      setCustomSlot({
+        xPct: 0.5 - wPct / 2,
+        yPct: 0.5 - hPct / 2,
+        wPct,
+        hPct
+      });
+    } else if (preset === 'full') {
+      setCustomSlot({ xPct: 0, yPct: 0, wPct: 1, hPct: 1 });
+    }
+  };
+
+  const updateSlotPixel = (key, pixelValue) => {
+    const W = canvasSize.width || 1000;
+    const H = canvasSize.height || 1000;
+    const num = Math.max(0, Number(pixelValue) || 0);
+
+    setCustomSlot((prev) => {
+      let next = { ...prev };
+      if (key === 'width') {
+        const wPct = Math.max(0.05, Math.min(1 - prev.xPct, num / W));
+        next.wPct = wPct;
+      } else if (key === 'height') {
+        const hPct = Math.max(0.05, Math.min(1 - prev.yPct, num / H));
+        next.hPct = hPct;
+      } else if (key === 'x') {
+        const xPct = Math.max(0, Math.min(1 - prev.wPct, num / W));
+        next.xPct = xPct;
+      } else if (key === 'y') {
+        const yPct = Math.max(0, Math.min(1 - prev.hPct, num / H));
+        next.yPct = yPct;
+      }
+      return next;
+    });
+  };
 
   const handleSelectAllPhotos = () => {
     setSelectedPhotoIds(new Set(docImages.map((d) => d.id)));
@@ -90,10 +441,10 @@ export default function FrameEditor({ onStartExport, setExportStatus, onProgress
       frameOverlayImage: frameImgObj,
       frameOpacity,
       docImage: activeDocImgObj,
-      docCropArea: { x: 0, y: 0, width: canvasSize.width, height: canvasSize.height },
+      docCropArea: activeCropArea,
       docAlignment
     });
-  }, [frameImgObj, frameOpacity, activeDocImgObj, canvasSize, docAlignment]);
+  }, [frameImgObj, frameOpacity, activeDocImgObj, canvasSize, docAlignment, activeCropArea]);
 
   const handleFrameUpload = (e) => {
     const file = e.target.files?.[0];
@@ -199,7 +550,7 @@ export default function FrameEditor({ onStartExport, setExportStatus, onProgress
         frameOverlayImage: frameImgObj,
         frameOpacity,
         docAlignment,
-        docCropArea: { x: 0, y: 0, width: canvasSize.width, height: canvasSize.height }
+        docCropArea: activeCropArea
       },
       width: canvasSize.width,
       height: canvasSize.height,
@@ -287,8 +638,25 @@ export default function FrameEditor({ onStartExport, setExportStatus, onProgress
         return;
       }
 
-      // Cycle Photo Preview (Up / Down, [ / ])
-      if (['ArrowUp', 'ArrowDown', '[', ']'].includes(e.key) && docImages.length > 0) {
+      // Custom Photo Slot Arrow Key Nudging
+      if (photoSlotMode === 'custom' && ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
+        e.preventDefault();
+        const delta = e.shiftKey ? 0.05 : 0.01;
+        setCustomSlot((prev) => {
+          let newX = prev.xPct;
+          let newY = prev.yPct;
+          if (e.key === 'ArrowLeft') newX = Math.max(0, prev.xPct - delta);
+          if (e.key === 'ArrowRight') newX = Math.min(1 - prev.wPct, prev.xPct + delta);
+          if (e.key === 'ArrowUp') newY = Math.max(0, prev.yPct - delta);
+          if (e.key === 'ArrowDown') newY = Math.min(1 - prev.hPct, prev.yPct + delta);
+          return { ...prev, xPct: newX, yPct: newY };
+        });
+        return;
+      }
+
+      // Cycle Photo Preview (Up / Down if full frame, or [ / ] in any mode)
+      const isNavCycleKey = (photoSlotMode !== 'custom' && ['ArrowUp', 'ArrowDown'].includes(e.key)) || ['[', ']'].includes(e.key);
+      if (isNavCycleKey && docImages.length > 0) {
         e.preventDefault();
         if (e.key === 'ArrowUp' || e.key === '[') {
           setActiveDocIdx((prev) => (prev > 0 ? prev - 1 : docImages.length - 1));
@@ -300,7 +668,7 @@ export default function FrameEditor({ onStartExport, setExportStatus, onProgress
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [docImages, selectedPhotoIds, frameImgObj, canvasSize, docAlignment, autoClearPhotos]);
+  }, [docImages, selectedPhotoIds, frameImgObj, canvasSize, docAlignment, autoClearPhotos, photoSlotMode, customSlot]);
 
   // Drag and Drop State & Handlers for FrameEditor
   const [isDragOverFrameEditor, setIsDragOverFrameEditor] = useState(false);
@@ -439,30 +807,287 @@ export default function FrameEditor({ onStartExport, setExportStatus, onProgress
             </div>
           </div>
 
-          {/* Step 2: Smart Crop Alignment */}
-          <div className="glass-panel p-5 space-y-3">
-            <div className="flex items-center gap-2">
-              <Crop className="w-4 h-4 text-emerald-500" />
-              <h3 className="font-bold text-sm text-main">Step 2: Smart Center-Crop Alignment</h3>
+          {/* Step 2: Photo Framing & Placement Slot */}
+          <div className="glass-panel p-5 space-y-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <BoxSelect className="w-4 h-4 text-purple-400" />
+                <h3 className="font-bold text-sm text-main">Step 2: Photo Framing & Placement Slot</h3>
+              </div>
+              {photoSlotMode === 'custom' && (
+                <span className="badge badge-purple text-[10px]">Active Slot</span>
+              )}
             </div>
-            <p className="text-xs text-slate-400">
-              Photos extending outside the frame dimensions are clipped and centered seamlessly.
-            </p>
 
-            <div className="grid grid-cols-3 gap-2">
-              {['center', 'top', 'bottom'].map((align) => (
-                <button
-                  key={align}
-                  onClick={() => setDocAlignment(align)}
-                  className={`py-2 px-3 rounded-xl text-xs font-bold capitalize border transition-all ${
-                    docAlignment === align
-                      ? 'bg-emerald-600 text-white border-emerald-500 shadow-md'
-                      : 'btn-secondary text-slate-400 hover:text-main'
-                  }`}
-                >
-                  {align === 'center' ? 'Center Cover' : `${align} Cover`}
-                </button>
-              ))}
+            {/* Mode Selection Cards */}
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => setPhotoSlotMode('full')}
+                className={`p-3 rounded-xl text-left border transition-all flex flex-col gap-1.5 ${
+                  photoSlotMode === 'full'
+                    ? 'bg-purple-600 text-white border-purple-500 shadow-md shadow-purple-500/20'
+                    : 'glass-panel text-slate-400 hover:text-white hover:border-purple-500/40'
+                }`}
+              >
+                <div className="flex items-center gap-2">
+                  <Square className="w-3.5 h-3.5 flex-shrink-0" />
+                  <span className="text-xs font-bold">Full Frame</span>
+                </div>
+                <span className={`text-[10px] leading-tight ${photoSlotMode === 'full' ? 'text-purple-100' : 'text-slate-400'}`}>
+                  Edge-to-edge bleed across entire canvas.
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setPhotoSlotMode('custom')}
+                className={`p-3 rounded-xl text-left border transition-all flex flex-col gap-1.5 ${
+                  photoSlotMode === 'custom'
+                    ? 'bg-purple-600 text-white border-purple-500 shadow-md shadow-purple-500/20'
+                    : 'glass-panel text-slate-400 hover:text-white hover:border-purple-500/40'
+                }`}
+              >
+                <div className="flex items-center gap-2">
+                  <Crop className="w-3.5 h-3.5 flex-shrink-0 text-amber-300" />
+                  <span className="text-xs font-bold">Custom Photo Slot</span>
+                </div>
+                <span className={`text-[10px] leading-tight ${photoSlotMode === 'custom' ? 'text-purple-100' : 'text-slate-400'}`}>
+                  Draggable box for thick borders / cutouts.
+                </span>
+              </button>
+            </div>
+
+            {/* Custom Photo Slot Detailed Controls */}
+            {photoSlotMode === 'custom' && (
+              <div className="p-3.5 rounded-xl bg-slate-950/70 border border-purple-500/30 space-y-3 animate-fade-in">
+                <div className="flex items-center justify-between text-xs font-bold text-slate-300">
+                  <span className="flex items-center gap-1.5 text-purple-300">
+                    <Sparkles className="w-3.5 h-3.5 text-purple-400" />
+                    Custom Slot Settings
+                  </span>
+                  <button
+                    type="button"
+                    onClick={snapCenterBoth}
+                    className="text-[10px] text-amber-400 hover:underline flex items-center gap-1"
+                  >
+                    <Crosshair className="w-3 h-3" /> Center In Frame
+                  </button>
+                </div>
+
+                <p className="text-[11px] text-slate-400 leading-relaxed">
+                  Drag the square on the preview stage to position it. Photos will fit into this box without warping or distortion, and excess is clipped.
+                </p>
+
+                {/* Quick Alignment Actions */}
+                <div className="space-y-1">
+                  <span className="text-[10.5px] font-bold text-slate-400 uppercase tracking-wider block">
+                    Quick Snapping:
+                  </span>
+                  <div className="grid grid-cols-3 gap-1.5">
+                    <button
+                      type="button"
+                      onClick={snapCenterX}
+                      className="btn-secondary text-[10.5px] py-1 px-2 justify-center hover:border-purple-500"
+                    >
+                      Center X
+                    </button>
+                    <button
+                      type="button"
+                      onClick={snapCenterY}
+                      className="btn-secondary text-[10.5px] py-1 px-2 justify-center hover:border-purple-500"
+                    >
+                      Center Y
+                    </button>
+                    <button
+                      type="button"
+                      onClick={snapCenterBoth}
+                      className="btn-secondary text-[10.5px] py-1 px-2 justify-center text-purple-300 border-purple-500/40 hover:border-purple-400 font-bold"
+                    >
+                      Center Both
+                    </button>
+                  </div>
+                </div>
+
+                {/* Aspect Ratio Presets */}
+                <div className="space-y-1">
+                  <span className="text-[10.5px] font-bold text-slate-400 uppercase tracking-wider block">
+                    Slot Size Presets:
+                  </span>
+                  <div className="grid grid-cols-3 gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => applySlotPreset('center80')}
+                      className="btn-secondary text-[10px] py-1 px-1.5 justify-center hover:border-purple-500"
+                      title="80% Frame Opening"
+                    >
+                      Center 80%
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => applySlotPreset('center70')}
+                      className="btn-secondary text-[10px] py-1 px-1.5 justify-center hover:border-purple-500"
+                      title="70% Frame Opening"
+                    >
+                      Center 70%
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => applySlotPreset('square')}
+                      className="btn-secondary text-[10px] py-1 px-1.5 justify-center text-amber-300 hover:border-amber-400"
+                      title="1:1 Square"
+                    >
+                      Square 1:1
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => applySlotPreset('photo43')}
+                      className="btn-secondary text-[10px] py-1 px-1.5 justify-center hover:border-purple-500"
+                      title="4:3 Standard Photo"
+                    >
+                      Photo 4:3
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => applySlotPreset('photo32')}
+                      className="btn-secondary text-[10px] py-1 px-1.5 justify-center hover:border-purple-500"
+                      title="3:2 Classic Photo"
+                    >
+                      Photo 3:2
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => applySlotPreset('wide169')}
+                      className="btn-secondary text-[10px] py-1 px-1.5 justify-center hover:border-purple-500"
+                      title="16:9 Widescreen"
+                    >
+                      Wide 16:9
+                    </button>
+                  </div>
+                </div>
+
+                {/* Direct Pixel Dimensions Inputs */}
+                <div className="space-y-1.5 pt-1 border-t border-slate-800">
+                  <div className="flex items-center justify-between text-[10.5px] text-slate-400 font-bold uppercase tracking-wider">
+                    <span>Slot Dimensions & Position:</span>
+                    <span className="text-purple-400 font-mono lowercase">{canvasSize.width}×{canvasSize.height}px canvas</span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 text-xs">
+                    <div className="space-y-1">
+                      <label className="text-[10px] text-slate-400 flex justify-between">
+                        <span>Width (W):</span>
+                        <span className="font-mono text-purple-300">{Math.round(customSlot.wPct * 100)}%</span>
+                      </label>
+                      <div className="relative flex items-center">
+                        <input
+                          type="number"
+                          min="10"
+                          max={canvasSize.width}
+                          value={activeCropArea.width}
+                          onChange={(e) => updateSlotPixel('width', e.target.value)}
+                          className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-white font-mono text-xs focus:border-purple-500 focus:outline-none"
+                        />
+                        <span className="absolute right-2 text-[10px] text-slate-500 pointer-events-none">px</span>
+                      </div>
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="text-[10px] text-slate-400 flex justify-between">
+                        <span>Height (H):</span>
+                        <span className="font-mono text-purple-300">{Math.round(customSlot.hPct * 100)}%</span>
+                      </label>
+                      <div className="relative flex items-center">
+                        <input
+                          type="number"
+                          min="10"
+                          max={canvasSize.height}
+                          value={activeCropArea.height}
+                          onChange={(e) => updateSlotPixel('height', e.target.value)}
+                          className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-white font-mono text-xs focus:border-purple-500 focus:outline-none"
+                        />
+                        <span className="absolute right-2 text-[10px] text-slate-500 pointer-events-none">px</span>
+                      </div>
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="text-[10px] text-slate-400 flex justify-between">
+                        <span>Left (X):</span>
+                        <span className="font-mono text-purple-300">{Math.round(customSlot.xPct * 100)}%</span>
+                      </label>
+                      <div className="relative flex items-center">
+                        <input
+                          type="number"
+                          min="0"
+                          max={canvasSize.width}
+                          value={activeCropArea.x}
+                          onChange={(e) => updateSlotPixel('x', e.target.value)}
+                          className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-white font-mono text-xs focus:border-purple-500 focus:outline-none"
+                        />
+                        <span className="absolute right-2 text-[10px] text-slate-500 pointer-events-none">px</span>
+                      </div>
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="text-[10px] text-slate-400 flex justify-between">
+                        <span>Top (Y):</span>
+                        <span className="font-mono text-purple-300">{Math.round(customSlot.yPct * 100)}%</span>
+                      </label>
+                      <div className="relative flex items-center">
+                        <input
+                          type="number"
+                          min="0"
+                          max={canvasSize.height}
+                          value={activeCropArea.y}
+                          onChange={(e) => updateSlotPixel('y', e.target.value)}
+                          className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-white font-mono text-xs focus:border-purple-500 focus:outline-none"
+                        />
+                        <span className="absolute right-2 text-[10px] text-slate-500 pointer-events-none">px</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Toggle Show Guides */}
+                <div className="flex items-center justify-between pt-1 border-t border-slate-800/80 text-[11px] text-slate-400">
+                  <span>Overlay boundary lines:</span>
+                  <button
+                    type="button"
+                    onClick={() => setShowSlotGuides((v) => !v)}
+                    className="text-purple-300 hover:text-white flex items-center gap-1 font-bold"
+                  >
+                    {showSlotGuides ? <Eye className="w-3 h-3" /> : <EyeOff className="w-3 h-3" />}
+                    <span>{showSlotGuides ? 'Guides Visible' : 'Guides Hidden'}</span>
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Smart Crop Alignment Inside Slot */}
+            <div className="space-y-2 pt-1 border-t border-slate-700/30">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-slate-300 flex items-center gap-1.5">
+                  <Crop className="w-3.5 h-3.5 text-emerald-400" />
+                  Crop Alignment Inside {photoSlotMode === 'custom' ? 'Slot' : 'Frame'}:
+                </span>
+                <span className="text-[10px] text-slate-400">Preserves Aspect Ratio</span>
+              </div>
+
+              <div className="grid grid-cols-3 gap-2">
+                {['center', 'top', 'bottom'].map((align) => (
+                  <button
+                    key={align}
+                    type="button"
+                    onClick={() => setDocAlignment(align)}
+                    className={`py-2 px-3 rounded-xl text-xs font-bold capitalize border transition-all ${
+                      docAlignment === align
+                        ? 'bg-emerald-600 text-white border-emerald-500 shadow-md'
+                        : 'btn-secondary text-slate-400 hover:text-main'
+                    }`}
+                  >
+                    {align === 'center' ? 'Center Cover' : `${align} Cover`}
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
 
@@ -688,23 +1313,195 @@ export default function FrameEditor({ onStartExport, setExportStatus, onProgress
         {/* Right Preview Viewport */}
         <div className="lg:col-span-7 md:col-span-12 space-y-4">
           <div className="glass-panel p-5 space-y-4 sticky top-20">
-            <div className="flex items-center justify-between">
-              <h3 className="font-bold text-base text-main">Framed Output Preview</h3>
-              <span className="text-xs text-slate-400 font-mono">Frame (Top Layer) → Smart Crop Photo (Bottom)</span>
+            {/* Header & Stage Toolbar */}
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <h3 className="font-bold text-base text-main">Framed Output Preview</h3>
+                <span className="text-xs text-slate-400 font-mono">
+                  {photoSlotMode === 'custom'
+                    ? 'Frame Overlay (Top) → Custom Photo Slot (Bottom)'
+                    : 'Frame Overlay (Top) → Full Bleed Photo (Bottom)'}
+                </span>
+              </div>
+
+              {/* Viewport Zoom & Quick Snap Toolbar */}
+              <div className="flex items-center gap-1.5 bg-slate-950/80 px-2 py-1 rounded-xl border border-slate-800 text-xs shadow-sm">
+                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider hidden sm:inline">Zoom:</span>
+                <button
+                  type="button"
+                  onClick={() => setZoomScale((z) => Math.max(0.6, Number((z - 0.15).toFixed(2))))}
+                  className="p-1 rounded hover:bg-slate-800 text-slate-300 hover:text-white"
+                  title="Zoom Out"
+                >
+                  <ZoomOut className="w-3.5 h-3.5" />
+                </button>
+                <span className="font-mono text-[11px] font-bold text-purple-400 w-10 text-center">
+                  {Math.round(zoomScale * 100)}%
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setZoomScale((z) => Math.min(1.6, Number((z + 0.15).toFixed(2))))}
+                  className="p-1 rounded hover:bg-slate-800 text-slate-300 hover:text-white"
+                  title="Zoom In"
+                >
+                  <ZoomIn className="w-3.5 h-3.5" />
+                </button>
+
+                {photoSlotMode === 'custom' && (
+                  <>
+                    <div className="w-[1px] h-3.5 bg-slate-800 mx-1" />
+                    <button
+                      type="button"
+                      onClick={snapCenterBoth}
+                      className="px-2 py-0.5 rounded bg-purple-500/20 hover:bg-purple-500/30 text-purple-300 text-[10.5px] font-semibold flex items-center gap-1 border border-purple-500/30"
+                      title="Snap Custom Slot to Center"
+                    >
+                      <Crosshair className="w-3 h-3" /> Center
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setShowSlotGuides((v) => !v)}
+                      className={`p-1 rounded transition ${showSlotGuides ? 'text-purple-400 bg-purple-500/20' : 'text-slate-400 hover:text-white'}`}
+                      title={showSlotGuides ? "Hide Slot Guides" : "Show Slot Guides"}
+                    >
+                      {showSlotGuides ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
+                    </button>
+                  </>
+                )}
+              </div>
             </div>
 
-            <div className="w-full overflow-auto glass-panel p-4 rounded-2xl flex justify-center shadow-inner min-h-[300px]">
-              <canvas
-                ref={canvasRef}
-                width={canvasSize.width}
-                height={canvasSize.height}
-                className="max-w-full h-auto rounded-lg shadow-2xl border border-slate-700/40"
-              />
+            {/* Stage Canvas Area */}
+            <div className="w-full overflow-auto glass-panel p-4 rounded-2xl flex justify-center shadow-inner min-h-[340px]">
+              <div
+                ref={stageContainerRef}
+                className="relative select-none touch-none inline-block max-w-full transition-transform duration-75"
+                style={{
+                  width: `${Math.round(zoomScale * 100)}%`,
+                  maxWidth: zoomScale > 1 ? `${Math.round(zoomScale * 100)}%` : '100%'
+                }}
+              >
+                {/* HTML5 Canvas */}
+                <canvas
+                  ref={canvasRef}
+                  width={canvasSize.width}
+                  height={canvasSize.height}
+                  className="w-full h-auto rounded-lg shadow-2xl border border-slate-700/40 block"
+                />
+
+                {/* Magnetic Snap Guidelines */}
+                {photoSlotMode === 'custom' && snapLines.showX && (
+                  <div
+                    className="absolute top-0 bottom-0 border-r-2 border-dashed border-cyan-400 z-30 pointer-events-none shadow-lg"
+                    style={{ left: `${snapLines.xPos}px` }}
+                  />
+                )}
+                {photoSlotMode === 'custom' && snapLines.showY && (
+                  <div
+                    className="absolute left-0 right-0 border-b-2 border-dashed border-cyan-400 z-30 pointer-events-none shadow-lg"
+                    style={{ top: `${snapLines.yPos}px` }}
+                  />
+                )}
+
+                {/* Interactive Custom Photo Slot Bounding Box Overlay */}
+                {photoSlotMode === 'custom' && showSlotGuides && (
+                  <div
+                    onMouseDown={handleSlotMoveStart}
+                    onTouchStart={handleSlotMoveStart}
+                    className="absolute cursor-move border-2 border-purple-400 bg-purple-500/10 shadow-[0_0_20px_rgba(168,85,247,0.35)] ring-2 ring-purple-500/30 z-20 select-none group"
+                    style={{
+                      left: `${customSlot.xPct * 100}%`,
+                      top: `${customSlot.yPct * 100}%`,
+                      width: `${customSlot.wPct * 100}%`,
+                      height: `${customSlot.hPct * 100}%`
+                    }}
+                  >
+                    {/* Canva-Style Tag Chip at Top */}
+                    <div className="absolute -top-6 left-0 bg-purple-600 text-white font-mono font-bold text-[9.5px] px-2 py-0.5 rounded-t shadow-md pointer-events-none whitespace-nowrap flex items-center gap-1.5 z-30">
+                      <span>📷 Photo Slot:</span>
+                      <span className="text-amber-300 font-extrabold">{activeCropArea.width} × {activeCropArea.height} px</span>
+                      <span className="opacity-75 hidden sm:inline">({Math.round(customSlot.wPct * 100)}% × {Math.round(customSlot.hPct * 100)}%)</span>
+                    </div>
+
+                    {/* Subtle Crosshair in Center */}
+                    <div className="absolute inset-0 flex items-center justify-center pointer-events-none opacity-40 group-hover:opacity-70 transition-opacity">
+                      <div className="w-4 h-0.5 bg-purple-300/60" />
+                      <div className="h-4 w-0.5 bg-purple-300/60 -ml-2" />
+                    </div>
+
+                    {/* 4 Corner Resize Handles */}
+                    {/* Top-Left */}
+                    <div
+                      onMouseDown={(e) => handleSlotResizeStart(e, 'nw')}
+                      onTouchStart={(e) => handleSlotResizeStart(e, 'nw')}
+                      className="absolute -top-2 -left-2 w-4 h-4 bg-white border-2 border-purple-600 rounded-full cursor-nwse-resize shadow-md hover:scale-125 z-30 ring-2 ring-purple-500/40"
+                      title="Resize Top-Left"
+                    />
+                    {/* Top-Right */}
+                    <div
+                      onMouseDown={(e) => handleSlotResizeStart(e, 'ne')}
+                      onTouchStart={(e) => handleSlotResizeStart(e, 'ne')}
+                      className="absolute -top-2 -right-2 w-4 h-4 bg-white border-2 border-purple-600 rounded-full cursor-nesw-resize shadow-md hover:scale-125 z-30 ring-2 ring-purple-500/40"
+                      title="Resize Top-Right"
+                    />
+                    {/* Bottom-Left */}
+                    <div
+                      onMouseDown={(e) => handleSlotResizeStart(e, 'sw')}
+                      onTouchStart={(e) => handleSlotResizeStart(e, 'sw')}
+                      className="absolute -bottom-2 -left-2 w-4 h-4 bg-white border-2 border-purple-600 rounded-full cursor-nesw-resize shadow-md hover:scale-125 z-30 ring-2 ring-purple-500/40"
+                      title="Resize Bottom-Left"
+                    />
+                    {/* Bottom-Right */}
+                    <div
+                      onMouseDown={(e) => handleSlotResizeStart(e, 'se')}
+                      onTouchStart={(e) => handleSlotResizeStart(e, 'se')}
+                      className="absolute -bottom-2 -right-2 w-4 h-4 bg-white border-2 border-purple-600 rounded-full cursor-nwse-resize shadow-md hover:scale-125 z-30 ring-2 ring-purple-500/40"
+                      title="Resize Bottom-Right"
+                    />
+
+                    {/* 4 Edge Resize Handles */}
+                    {/* Top */}
+                    <div
+                      onMouseDown={(e) => handleSlotResizeStart(e, 'n')}
+                      onTouchStart={(e) => handleSlotResizeStart(e, 'n')}
+                      className="absolute -top-1.5 left-1/2 -translate-x-1/2 w-6 h-2 bg-purple-500 border border-white rounded-full cursor-ns-resize shadow-sm hover:scale-125 z-30"
+                      title="Resize Height (Top)"
+                    />
+                    {/* Bottom */}
+                    <div
+                      onMouseDown={(e) => handleSlotResizeStart(e, 's')}
+                      onTouchStart={(e) => handleSlotResizeStart(e, 's')}
+                      className="absolute -bottom-1.5 left-1/2 -translate-x-1/2 w-6 h-2 bg-purple-500 border border-white rounded-full cursor-ns-resize shadow-sm hover:scale-125 z-30"
+                      title="Resize Height (Bottom)"
+                    />
+                    {/* Left */}
+                    <div
+                      onMouseDown={(e) => handleSlotResizeStart(e, 'w')}
+                      onTouchStart={(e) => handleSlotResizeStart(e, 'w')}
+                      className="absolute -left-1.5 top-1/2 -translate-y-1/2 w-2 h-6 bg-purple-500 border border-white rounded-full cursor-ew-resize shadow-sm hover:scale-125 z-30"
+                      title="Resize Width (Left)"
+                    />
+                    {/* Right */}
+                    <div
+                      onMouseDown={(e) => handleSlotResizeStart(e, 'e')}
+                      onTouchStart={(e) => handleSlotResizeStart(e, 'e')}
+                      className="absolute -right-1.5 top-1/2 -translate-y-1/2 w-2 h-6 bg-purple-500 border border-white rounded-full cursor-ew-resize shadow-sm hover:scale-125 z-30"
+                      title="Resize Width (Right)"
+                    />
+                  </div>
+                )}
+              </div>
             </div>
 
-            <div className="flex justify-between text-xs text-slate-400 px-1 font-medium">
+            {/* Bottom Status Bar */}
+            <div className="flex flex-wrap items-center justify-between text-xs text-slate-400 px-1 font-medium gap-2">
               <span>{docImages.length > 0 ? `Previewing #${activeDocIdx + 1}: ${docImages[activeDocIdx]?.name}` : 'No photos loaded'}</span>
-              <span className="text-emerald-500">100% Fit & Scaled Without Distortion</span>
+              <span className="text-emerald-400 font-semibold flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                {photoSlotMode === 'custom' 
+                  ? `Custom Photo Slot Active (${activeCropArea.width}×${activeCropArea.height}px • Unwarped Cover)` 
+                  : 'Full Bleed Edge-to-Edge Active'}
+              </span>
             </div>
           </div>
         </div>

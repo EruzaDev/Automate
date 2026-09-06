@@ -51,6 +51,7 @@ export function calculateCoverDimensions(srcWidth, srcHeight, destWidth, destHei
  */
 export function drawCoverImage(ctx, img, targetX, targetY, targetWidth, targetHeight, alignment = 'center') {
   if (!img || !img.complete || img.naturalWidth === 0) return;
+  if (!targetWidth || !targetHeight || targetWidth <= 0 || targetHeight <= 0) return;
 
   const { renderWidth, renderHeight, offsetX, offsetY } = calculateCoverDimensions(
     img.naturalWidth,
@@ -61,6 +62,9 @@ export function drawCoverImage(ctx, img, targetX, targetY, targetWidth, targetHe
   );
 
   ctx.save();
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+
   // Clip to target bounding box
   ctx.beginPath();
   ctx.rect(targetX, targetY, targetWidth, targetHeight);
