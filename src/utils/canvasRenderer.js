@@ -1,5 +1,6 @@
 import { drawCoverImage } from './smartCrop';
 import { renderQRCodeToCanvas } from './qrGenerator';
+import { applyPhotoAdjustments, hasPhotoAdjustments } from './photoAdjustments';
 
 /**
  * Loads an image from URL or data URI asynchronously
@@ -148,6 +149,7 @@ export async function renderCanvasElement(ctx, canvasWidth, canvasHeight, layerD
     docImage,
     docCropArea = { x: 0, y: 0, width: canvasWidth, height: canvasHeight },
     docAlignment = 'center',
+    photoAdjustments,
     textLayers = [],
     qrLayers = [],
     recordData = {}
@@ -162,15 +164,22 @@ export async function renderCanvasElement(ctx, canvasWidth, canvasHeight, layerD
 
   // 1. Draw Documentation / Content Image (if present, underneath background or frame)
   if (docImage) {
-    drawCoverImage(
-      ctx,
-      docImage,
-      validCropArea.x,
-      validCropArea.y,
-      validCropArea.width,
-      validCropArea.height,
-      docAlignment
-    );
+    if (hasPhotoAdjustments(photoAdjustments)) {
+      const transform = ctx.getTransform();
+      const photoCanvas = document.createElement('canvas');
+      photoCanvas.width = Math.max(1, Math.round(validCropArea.width * Math.hypot(transform.a, transform.b)));
+      photoCanvas.height = Math.max(1, Math.round(validCropArea.height * Math.hypot(transform.c, transform.d)));
+      const photoCtx = photoCanvas.getContext('2d', { willReadFrequently: true });
+      drawCoverImage(photoCtx, docImage, 0, 0, photoCanvas.width, photoCanvas.height, docAlignment);
+      const pixels = photoCtx.getImageData(0, 0, photoCanvas.width, photoCanvas.height);
+      photoCtx.putImageData(applyPhotoAdjustments(pixels, photoAdjustments), 0, 0);
+      ctx.drawImage(photoCanvas, validCropArea.x, validCropArea.y, validCropArea.width, validCropArea.height);
+      photoCanvas.width = 0;
+      photoCanvas.height = 0;
+    } else {
+      drawCoverImage(ctx, docImage, validCropArea.x, validCropArea.y,
+        validCropArea.width, validCropArea.height, docAlignment);
+    }
   }
 
   // 2. Draw Background Template Image (e.g. Certificate background or Badge base template)
