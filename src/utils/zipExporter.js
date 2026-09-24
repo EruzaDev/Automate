@@ -124,6 +124,7 @@ export async function exportBatchToZip({
       await renderCanvasElement(ctx, width, height, {
         ...layerConfig,
         photoAdjustments: record._photoAdjustments || layerConfig.photoAdjustments,
+        docTransform: record._docTransform || layerConfig.docTransform,
         backgroundImage: bgImg,
         frameOverlayImage: frameImg,
         docImage: docImg,
