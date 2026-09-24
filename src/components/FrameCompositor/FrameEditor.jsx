@@ -22,6 +22,8 @@ import {
 } from 'lucide-react';
 import { renderCanvasElement, loadImage, createCompressedThumbnail } from '../../utils/canvasRenderer';
 import { exportBatchToZip } from '../../utils/zipExporter';
+import { DEFAULT_PHOTO_ADJUSTMENTS } from '../../utils/photoAdjustments';
+import PhotoAdjustmentsPanel from './PhotoAdjustmentsPanel';
 
 export default function FrameEditor({ onStartExport, setExportStatus, onProgressChange, onRegisterCancel }) {
   const [frameSrc, setFrameSrc] = useState(null);
@@ -33,6 +35,14 @@ export default function FrameEditor({ onStartExport, setExportStatus, onProgress
   const [selectedPhotoIds, setSelectedPhotoIds] = useState(new Set());
   const [activeDocIdx, setActiveDocIdx] = useState(0);
   const [activeDocImgObj, setActiveDocImgObj] = useState(null);
+  const activeDoc = docImages[activeDocIdx] || null;
+  const photoAdjustments = activeDoc?.photoAdjustments || DEFAULT_PHOTO_ADJUSTMENTS;
+  const updateActivePhotoAdjustments = (next) => {
+    if (!activeDoc) return;
+    setDocImages((previous) => previous.map((doc) =>
+      doc.id === activeDoc.id ? { ...doc, photoAdjustments: next } : doc
+    ));
+  };
 
   const [docAlignment, setDocAlignment] = useState('center');
   const [autoClearPhotos, setAutoClearPhotos] = useState(true);
@@ -87,6 +97,11 @@ export default function FrameEditor({ onStartExport, setExportStatus, onProgress
       height: canvasSize.height
     };
   }, [photoSlotMode, customSlot, canvasSize]);
+
+  // The preview is displayed at panel size; full frame pixels are only needed for export.
+  const previewScale = Math.min(1, 1024 / Math.max(canvasSize.width, canvasSize.height));
+  const previewWidth = Math.max(1, Math.round(canvasSize.width * previewScale));
+  const previewHeight = Math.max(1, Math.round(canvasSize.height * previewScale));
 
   // Magnetic Snapping helper for custom photo slot
   const applySnapping = (xPct, yPct, wPct, hPct, displayW, displayH) => {
@@ -424,27 +439,34 @@ export default function FrameEditor({ onStartExport, setExportStatus, onProgress
   }, [frameSrc]);
 
   useEffect(() => {
-    const current = docImages[activeDocIdx];
-    if (current && current.src) {
-      loadImage(current.src).then((img) => {
-        setActiveDocImgObj(img);
+    let cancelled = false;
+    if (activeDoc?.src) {
+      loadImage(activeDoc.src).then((img) => {
+        if (!cancelled) setActiveDocImgObj(img);
       });
     } else {
       setActiveDocImgObj(null);
     }
-  }, [activeDocIdx, docImages]);
+    return () => { cancelled = true; };
+  }, [activeDoc?.src]);
 
   useEffect(() => {
     if (!canvasRef.current) return;
-    const ctx = canvasRef.current.getContext('2d');
-    renderCanvasElement(ctx, canvasSize.width, canvasSize.height, {
-      frameOverlayImage: frameImgObj,
-      frameOpacity,
-      docImage: activeDocImgObj,
-      docCropArea: activeCropArea,
-      docAlignment
+    const canvas = canvasRef.current;
+    const frame = requestAnimationFrame(() => {
+      const ctx = canvas.getContext('2d');
+      ctx.setTransform(canvas.width / canvasSize.width, 0, 0, canvas.height / canvasSize.height, 0, 0);
+      renderCanvasElement(ctx, canvasSize.width, canvasSize.height, {
+        frameOverlayImage: frameImgObj,
+        frameOpacity,
+        docImage: activeDocImgObj?.src === activeDoc?.src ? activeDocImgObj : null,
+        docCropArea: activeCropArea,
+        docAlignment,
+        photoAdjustments
+      });
     });
-  }, [frameImgObj, frameOpacity, activeDocImgObj, canvasSize, docAlignment, activeCropArea]);
+    return () => cancelAnimationFrame(frame);
+  }, [frameImgObj, frameOpacity, activeDocImgObj, activeDoc?.src, canvasSize, previewWidth, previewHeight, docAlignment, activeCropArea, photoAdjustments]);
 
   const handleFrameUpload = (e) => {
     const file = e.target.files?.[0];
@@ -541,6 +563,7 @@ export default function FrameEditor({ onStartExport, setExportStatus, onProgress
     const records = selectedDocs.map((doc) => ({
       name: doc.name.replace(/\.[^/.]+$/, ''),
       _docImageSrc: doc.src,
+      _photoAdjustments: doc.photoAdjustments || DEFAULT_PHOTO_ADJUSTMENTS,
       id: doc.id
     }));
 
@@ -1371,6 +1394,15 @@ export default function FrameEditor({ onStartExport, setExportStatus, onProgress
               </div>
             </div>
 
+            <PhotoAdjustmentsPanel
+              photoName={activeDoc?.name}
+              photoIndex={activeDocIdx}
+              photoCount={docImages.length}
+              onSelectPhoto={setActiveDocIdx}
+              adjustments={photoAdjustments}
+              onChange={updateActivePhotoAdjustments}
+            />
+
             {/* Stage Canvas Area */}
             <div className="w-full overflow-auto glass-panel p-4 rounded-2xl flex justify-center shadow-inner min-h-[340px]">
               <div
@@ -1384,8 +1416,8 @@ export default function FrameEditor({ onStartExport, setExportStatus, onProgress
                 {/* HTML5 Canvas */}
                 <canvas
                   ref={canvasRef}
-                  width={canvasSize.width}
-                  height={canvasSize.height}
+                  width={previewWidth}
+                  height={previewHeight}
                   className="w-full h-auto rounded-lg shadow-2xl border border-slate-700/40 block"
                 />
 

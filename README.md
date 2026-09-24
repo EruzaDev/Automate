@@ -47,4 +47,5 @@ The output will be bundled into the `dist/` directory ready for static productio
 
 ### 🖼️ Automate Framing
 - **Smart Center-Crop Algorithm**: Scales and centers batch photos to fill transparent PNG frame boundaries without aspect ratio distortion.
+- **Per-Photo Color Adjustments**: Adjust brightness, contrast, hue, saturation, exposure, highlights, shadows, whites, blacks, color balance, levels, and tone curves above the output preview. Each photo keeps its own settings for the preview and ZIP export.
 - **Batch Download**: Export framed documentation photo batches into a single organized ZIP archive.
