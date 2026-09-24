@@ -46,19 +46,40 @@ export function calculateCoverDimensions(srcWidth, srcHeight, destWidth, destHei
   };
 }
 
+export const DEFAULT_PHOTO_TRANSFORM = Object.freeze({ scale: 1, x: 0, y: 0 });
+
+/** Position a photo inside its crop area while keeping the area completely covered. */
+export function calculatePhotoPlacement(srcWidth, srcHeight, destWidth, destHeight, alignment = 'center', transform = DEFAULT_PHOTO_TRANSFORM) {
+  const cover = calculateCoverDimensions(srcWidth, srcHeight, destWidth, destHeight, alignment);
+  const scale = Math.max(1, Math.min(3, Number(transform?.scale) || 1));
+  const renderWidth = cover.renderWidth * scale;
+  const renderHeight = cover.renderHeight * scale;
+  const baseX = cover.offsetX - (renderWidth - cover.renderWidth) / 2;
+  const baseY = cover.offsetY - (renderHeight - cover.renderHeight) / 2;
+  const offsetX = Math.max(destWidth - renderWidth, Math.min(0, baseX + (Number(transform?.x) || 0) * destWidth));
+  const offsetY = Math.max(destHeight - renderHeight, Math.min(0, baseY + (Number(transform?.y) || 0) * destHeight));
+  return {
+    renderWidth, renderHeight, offsetX, offsetY,
+    scale,
+    x: (offsetX - baseX) / destWidth,
+    y: (offsetY - baseY) / destHeight
+  };
+}
+
 /**
  * Draws image onto canvas with cover fit & center crop
  */
-export function drawCoverImage(ctx, img, targetX, targetY, targetWidth, targetHeight, alignment = 'center') {
+export function drawCoverImage(ctx, img, targetX, targetY, targetWidth, targetHeight, alignment = 'center', transform = DEFAULT_PHOTO_TRANSFORM) {
   if (!img || !img.complete || img.naturalWidth === 0) return;
   if (!targetWidth || !targetHeight || targetWidth <= 0 || targetHeight <= 0) return;
 
-  const { renderWidth, renderHeight, offsetX, offsetY } = calculateCoverDimensions(
+  const { renderWidth, renderHeight, offsetX, offsetY } = calculatePhotoPlacement(
     img.naturalWidth,
     img.naturalHeight,
     targetWidth,
     targetHeight,
-    alignment
+    alignment,
+    transform
   );
 
   ctx.save();

@@ -18,12 +18,15 @@ import {
   EyeOff, 
   BoxSelect, 
   Sparkles,
-  Maximize2
+  Maximize2,
+  Move,
+  RotateCcw
 } from 'lucide-react';
 import { renderCanvasElement, loadImage, createCompressedThumbnail } from '../../utils/canvasRenderer';
 import { exportBatchToZip } from '../../utils/zipExporter';
 import { DEFAULT_PHOTO_ADJUSTMENTS } from '../../utils/photoAdjustments';
 import PhotoAdjustmentsPanel from './PhotoAdjustmentsPanel';
+import { calculatePhotoPlacement, DEFAULT_PHOTO_TRANSFORM } from '../../utils/smartCrop';
 
 export default function FrameEditor({ onStartExport, setExportStatus, onProgressChange, onRegisterCancel }) {
   const [frameSrc, setFrameSrc] = useState(null);
@@ -37,6 +40,8 @@ export default function FrameEditor({ onStartExport, setExportStatus, onProgress
   const [activeDocImgObj, setActiveDocImgObj] = useState(null);
   const activeDoc = docImages[activeDocIdx] || null;
   const photoAdjustments = activeDoc?.photoAdjustments || DEFAULT_PHOTO_ADJUSTMENTS;
+  const photoTransform = activeDoc?.photoTransform || DEFAULT_PHOTO_TRANSFORM;
+  const [isEditingPhoto, setIsEditingPhoto] = useState(false);
   const updateActivePhotoAdjustments = (next) => {
     if (!activeDoc) return;
     setDocImages((previous) => previous.map((doc) =>
@@ -61,6 +66,7 @@ export default function FrameEditor({ onStartExport, setExportStatus, onProgress
   const [snapLines, setSnapLines] = useState({ showX: false, showY: false, xPos: 0, yPos: 0 });
 
   const stageContainerRef = useRef(null);
+  const photoInteractionRef = useRef(null);
 
   // Export Quality & Safe Memory Settings
   const [exportResolution, setExportResolution] = useState(0); // Default 0 = Original (100% Native Quality)
@@ -102,6 +108,49 @@ export default function FrameEditor({ onStartExport, setExportStatus, onProgress
   const previewScale = Math.min(1, 1024 / Math.max(canvasSize.width, canvasSize.height));
   const previewWidth = Math.max(1, Math.round(canvasSize.width * previewScale));
   const previewHeight = Math.max(1, Math.round(canvasSize.height * previewScale));
+
+  const updateActivePhotoTransform = (next) => {
+    if (!activeDoc || !activeDocImgObj || activeDocImgObj.src !== activeDoc.src) return;
+    const placement = calculatePhotoPlacement(
+      activeDocImgObj.naturalWidth, activeDocImgObj.naturalHeight,
+      activeCropArea.width, activeCropArea.height, docAlignment, next
+    );
+    const constrained = { scale: placement.scale, x: placement.x, y: placement.y };
+    setDocImages((previous) => previous.map((doc) =>
+      doc.id === activeDoc.id ? { ...doc, photoTransform: constrained } : doc
+    ));
+  };
+
+  const handlePhotoPointerDown = (event, resize = false) => {
+    if (!activeDoc || !activeDocImgObj || event.button > 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const rect = photoInteractionRef.current?.getBoundingClientRect();
+    if (!rect?.width || !rect?.height) return;
+    const startX = event.clientX;
+    const startY = event.clientY;
+    const startTransform = { ...photoTransform };
+    const pointerId = event.pointerId;
+    const onMove = (moveEvent) => {
+      if (moveEvent.pointerId !== pointerId) return;
+      const dx = (moveEvent.clientX - startX) / rect.width;
+      const dy = (moveEvent.clientY - startY) / rect.height;
+      if (resize) {
+        updateActivePhotoTransform({ ...startTransform, scale: Math.max(1, Math.min(3, startTransform.scale + dx + dy)) });
+      } else {
+        updateActivePhotoTransform({ ...startTransform, x: startTransform.x + dx, y: startTransform.y + dy });
+      }
+    };
+    const onEnd = (endEvent) => {
+      if (endEvent.pointerId !== pointerId) return;
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onEnd);
+      window.removeEventListener('pointercancel', onEnd);
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onEnd);
+    window.addEventListener('pointercancel', onEnd);
+  };
 
   // Magnetic Snapping helper for custom photo slot
   const applySnapping = (xPct, yPct, wPct, hPct, displayW, displayH) => {
@@ -462,11 +511,12 @@ export default function FrameEditor({ onStartExport, setExportStatus, onProgress
         docImage: activeDocImgObj?.src === activeDoc?.src ? activeDocImgObj : null,
         docCropArea: activeCropArea,
         docAlignment,
+        docTransform: photoTransform,
         photoAdjustments
       });
     });
     return () => cancelAnimationFrame(frame);
-  }, [frameImgObj, frameOpacity, activeDocImgObj, activeDoc?.src, canvasSize, previewWidth, previewHeight, docAlignment, activeCropArea, photoAdjustments]);
+  }, [frameImgObj, frameOpacity, activeDocImgObj, activeDoc?.src, canvasSize, previewWidth, previewHeight, docAlignment, activeCropArea, photoTransform, photoAdjustments]);
 
   const handleFrameUpload = (e) => {
     const file = e.target.files?.[0];
@@ -564,6 +614,7 @@ export default function FrameEditor({ onStartExport, setExportStatus, onProgress
       name: doc.name.replace(/\.[^/.]+$/, ''),
       _docImageSrc: doc.src,
       _photoAdjustments: doc.photoAdjustments || DEFAULT_PHOTO_ADJUSTMENTS,
+      _docTransform: doc.photoTransform || DEFAULT_PHOTO_TRANSFORM,
       id: doc.id
     }));
 
@@ -841,6 +892,7 @@ export default function FrameEditor({ onStartExport, setExportStatus, onProgress
                 <span className="badge badge-purple text-[10px]">Active Slot</span>
               )}
             </div>
+            <p className="text-[11px] text-slate-400">This slot is shared by all photos. Move or resize a selected photo in the preview.</p>
 
             {/* Mode Selection Cards */}
             <div className="grid grid-cols-2 gap-2">
@@ -1403,6 +1455,28 @@ export default function FrameEditor({ onStartExport, setExportStatus, onProgress
               onChange={updateActivePhotoAdjustments}
             />
 
+            <div className="flex flex-wrap items-center gap-2 rounded-xl border border-slate-700/80 bg-slate-950/80 p-1.5 text-xs">
+              <button type="button" onClick={() => setIsEditingPhoto((value) => !value)} disabled={!activeDoc || !activeDocImgObj}
+                aria-pressed={isEditingPhoto} className={`h-8 px-2.5 rounded-lg flex items-center gap-1.5 font-bold disabled:opacity-40 ${
+                  isEditingPhoto ? 'bg-cyan-600 text-white' : 'text-slate-200 hover:bg-slate-800'
+                }`} title="Drag the photo inside the frame; drag its corner to resize">
+                <Move className="w-3.5 h-3.5" /> Move / resize photo
+              </button>
+              <label className="flex items-center gap-2 min-w-[150px] flex-1 px-1 text-slate-300">
+                <Maximize2 className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+                <span className="whitespace-nowrap">Size {Math.round(photoTransform.scale * 100)}%</span>
+                <input type="range" min="1" max="3" step="0.01" value={photoTransform.scale}
+                  onChange={(event) => updateActivePhotoTransform({ ...photoTransform, scale: Number(event.target.value) })}
+                  disabled={!activeDoc || !activeDocImgObj} aria-label="Photo size"
+                  className="w-full min-w-12 accent-cyan-500 cursor-pointer disabled:opacity-40" />
+              </label>
+              <button type="button" onClick={() => updateActivePhotoTransform(DEFAULT_PHOTO_TRANSFORM)}
+                disabled={!activeDoc || !activeDocImgObj} title="Reset photo position and size"
+                className="h-8 px-2 rounded-lg flex items-center gap-1 text-slate-300 hover:bg-slate-800 disabled:opacity-40">
+                <RotateCcw className="w-3.5 h-3.5" /> Reset
+              </button>
+            </div>
+
             {/* Stage Canvas Area */}
             <div className="w-full overflow-auto glass-panel p-4 rounded-2xl flex justify-center shadow-inner min-h-[340px]">
               <div
@@ -1421,6 +1495,27 @@ export default function FrameEditor({ onStartExport, setExportStatus, onProgress
                   className="w-full h-auto rounded-lg shadow-2xl border border-slate-700/40 block"
                 />
 
+                {isEditingPhoto && activeDocImgObj?.src === activeDoc?.src && (
+                  <div ref={photoInteractionRef} onPointerDown={(event) => handlePhotoPointerDown(event)}
+                    className="absolute z-40 border-2 border-dashed border-cyan-400/80 bg-cyan-500/5 cursor-move touch-none select-none"
+                    style={{
+                      left: `${activeCropArea.x / canvasSize.width * 100}%`,
+                      top: `${activeCropArea.y / canvasSize.height * 100}%`,
+                      width: `${activeCropArea.width / canvasSize.width * 100}%`,
+                      height: `${activeCropArea.height / canvasSize.height * 100}%`
+                    }}
+                    aria-label="Drag photo to reposition it"
+                    title="Drag to move the photo"
+                  >
+                    <span className="absolute top-1 left-1 rounded bg-slate-950/85 px-2 py-1 text-[10px] font-bold text-cyan-200 pointer-events-none">
+                      Drag photo · resize from corner
+                    </span>
+                    <button type="button" onPointerDown={(event) => handlePhotoPointerDown(event, true)}
+                      className="absolute -right-2 -bottom-2 w-5 h-5 rounded-full border-2 border-white bg-cyan-500 shadow-lg cursor-nwse-resize touch-none"
+                      aria-label="Drag to resize photo" title="Drag to resize photo" />
+                  </div>
+                )}
+
                 {/* Magnetic Snap Guidelines */}
                 {photoSlotMode === 'custom' && snapLines.showX && (
                   <div
@@ -1436,7 +1531,7 @@ export default function FrameEditor({ onStartExport, setExportStatus, onProgress
                 )}
 
                 {/* Interactive Custom Photo Slot Bounding Box Overlay */}
-                {photoSlotMode === 'custom' && showSlotGuides && (
+                {photoSlotMode === 'custom' && showSlotGuides && !isEditingPhoto && (
                   <div
                     onMouseDown={handleSlotMoveStart}
                     onTouchStart={handleSlotMoveStart}

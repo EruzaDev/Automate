@@ -149,6 +149,7 @@ export async function renderCanvasElement(ctx, canvasWidth, canvasHeight, layerD
     docImage,
     docCropArea = { x: 0, y: 0, width: canvasWidth, height: canvasHeight },
     docAlignment = 'center',
+    docTransform,
     photoAdjustments,
     textLayers = [],
     qrLayers = [],
@@ -170,7 +171,7 @@ export async function renderCanvasElement(ctx, canvasWidth, canvasHeight, layerD
       photoCanvas.width = Math.max(1, Math.round(validCropArea.width * Math.hypot(transform.a, transform.b)));
       photoCanvas.height = Math.max(1, Math.round(validCropArea.height * Math.hypot(transform.c, transform.d)));
       const photoCtx = photoCanvas.getContext('2d', { willReadFrequently: true });
-      drawCoverImage(photoCtx, docImage, 0, 0, photoCanvas.width, photoCanvas.height, docAlignment);
+      drawCoverImage(photoCtx, docImage, 0, 0, photoCanvas.width, photoCanvas.height, docAlignment, docTransform);
       const pixels = photoCtx.getImageData(0, 0, photoCanvas.width, photoCanvas.height);
       photoCtx.putImageData(applyPhotoAdjustments(pixels, photoAdjustments), 0, 0);
       ctx.drawImage(photoCanvas, validCropArea.x, validCropArea.y, validCropArea.width, validCropArea.height);
@@ -178,7 +179,7 @@ export async function renderCanvasElement(ctx, canvasWidth, canvasHeight, layerD
       photoCanvas.height = 0;
     } else {
       drawCoverImage(ctx, docImage, validCropArea.x, validCropArea.y,
-        validCropArea.width, validCropArea.height, docAlignment);
+        validCropArea.width, validCropArea.height, docAlignment, docTransform);
     }
   }
 
